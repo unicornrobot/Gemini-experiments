@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P5.js Serial Data Visualizer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+    <style>
+        /* Basic styling for canvas */
+        canvas {
+            display: block;
+            margin: 20px auto;
+            border: 1px solid #ccc;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Ensure buttons and controls are clearly visible and usable */
+        button, select, input {
+            padding: 8px 15px;
+            margin: 5px;
+            border-radius: 6px;
+            border: 1px solid #ccc;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        button:hover, select:hover {
+            background-color: #f0f0f0;
+        }
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+        .status-indicator {
+            padding: 10px;
+            margin-top: 10px;
+            border-radius: 6px;
+            font-weight: bold;
+        }
+        .status-disconnected { background-color: #fecaca; color: #991b1b; } /* Red */
+        .status-connected { background-color: #d1fae5; color: #065f46; } /* Green */
+        .status-collecting { background-color: #bfdbfe; color: #1e40af; } /* Blue */
+        .status-finished { background-color: #fef9c3; color: #854d0e; } /* Yellow */
+        .status-error { background-color: #fed7aa; color: #9a3412; } /* Orange */
+    </style>
+</head>
+<body class="bg-gray-100 p-5">
+
+    <div class="container mx-auto max-w-4xl bg-white p-6 rounded-lg shadow-md">
+        <h1 class="text-2xl font-bold mb-4 text-center text-gray-700">Serial Data Visualizer</h1>
+
+        <div class="controls flex flex-wrap justify-center items-center gap-4 mb-4 p-4 bg-gray-50 rounded-md">
+            <button id="connectButton" class="bg-blue-500 hover:bg-blue-600 text-white font-semibold rounded-md shadow">Connect to Serial Device</button>
+
+            <div class="flex items-center gap-2">
+                <label for="collectDuration" class="text-sm font-medium text-gray-600">Collect for (seconds):</label>
+                <input type="number" id="collectDuration" value="10" min="1" class="w-20 border-gray-300 rounded-md shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+            </div>
+
+            <button id="startButton" class="bg-green-500 hover:bg-green-600 text-white font-semibold rounded-md shadow" disabled>Start Collection</button>
+            <button id="stopButton" class="bg-red-500 hover:bg-red-600 text-white font-semibold rounded-md shadow" disabled>Stop Collection</button>
+
+            <div class="flex items-center gap-2">
+                <label for="vizSelect" class="text-sm font-medium text-gray-600">Visualization:</label>
+                <select id="vizSelect" class="border-gray-300 rounded-md shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+                    <option value="lines">Line Graph</option>
+                    <option value="circles">Circular Plot</option>
+                    <option value="radial">Radial Bars</option>
+                    <option value="stackedBars">Stacked Bars</option>
+                    </select>
+            </div>
+        </div>
+
+        <div id="status" class="status-indicator status-disconnected text-center mb-4">Status: Disconnected</div>
+        <div id="errorDisplay" class="status-indicator status-error text-center mb-4" style="display: none;">Error: None</div>
+        <div id="dataCount" class="text-center text-sm text-gray-500 mb-4">Data points collected: 0</div>
+
+
+        <div id="canvasContainer" class="border rounded-md overflow-hidden shadow">
+            </div>
+    </div>
+
+    <script>
+        // --- Global Variables ---
+        let port; // Serial port object
+        let reader; // Serial port reader
+        let keepReading = false; // Flag to control the reading loop
+        let incomingBuffer = ''; // Buffer for incomplete serial lines
+
+        let isCollecting = false; // Flag for data collection state
+        let collectionStartTime;
+        let collectionTimerId;
+        let collectedData = []; // Array to store collected data [[val1, val2,...], [val1, val2,...]]
+        let expectedDataLength = -1; // To store the number of values per line, determined by first valid data line
+
+        let p5Instance; // To hold the p5 sketch instance
+        let currentVisualization = 'lines'; // Default visualization
+
+        // --- UI Elements ---
+        const connectButton = document.getElementById('connectButton');
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const collectDurationInput = document.getElementById('collectDuration');
+        const vizSelect = document.getElementById('vizSelect');
+        const statusDiv = document.getElementById('status');
+        const errorDiv = document.getElementById('errorDisplay');
+        const dataCountDiv = document.getElementById('dataCount');
+        const canvasContainer = document.getElementById('canvasContainer');
+
+        // --- Utility Functions ---
+        function updateStatus(message, type) {
+            statusDiv.textContent = `Status: ${message}`;
+            statusDiv.className = `status-indicator text-center mb-4 status-${type}`; // Update class for styling
+        }
+
+        function showError(message) {
+            console.error(message);
+            errorDiv.textContent = `Error: ${message}`;
+            errorDiv.style.display = 'block';
+        }
+
+        function hideError() {
+            errorDiv.style.display = 'none';
+        }
+
+        function updateDataCount() {
+            dataCountDiv.textContent = `Data points collected: ${collectedData.length}`;
+        }
+
+        function updateButtonStates() {
+            const isConnected = port && port.readable;
+            connectButton.disabled = isConnected;
+            startButton.disabled = !isConnected || isCollecting;
+            stopButton.disabled = !isCollecting;
+            collectDurationInput.disabled = isCollecting;
+        }
+
+        // --- Serial Communication ---
+        async function connectSerial() {
+            hideError();
+            if ('serial' in navigator) {
+                try {
+                    updateStatus('Requesting port...', 'collecting');
+                    port = await navigator.serial.requestPort();
+                    await port.open({ baudRate: 9600 }); // Common baud rate, adjust if needed
+
+                    updateStatus('Connected', 'connected');
+                    keepReading = true;
+                    readLoop(); // Start the reading loop
+                    updateButtonStates();
+
+                } catch (err) {
+                    updateStatus('Connection failed', 'error');
+                    showError(`Could not connect: ${err.message}`);
+                    port = null;
+                    updateButtonStates();
+                }
+            } else {
+                updateStatus('Web Serial API not supported', 'error');
+                showError('Your browser does not support the Web Serial API. Try Chrome or Edge.');
+            }
+        }
+
+        async function readLoop() {
+            if (!port || !port.readable) {
+                console.warn("Port not available or closed.");
+                keepReading = false;
+                updateStatus('Disconnected', 'disconnected');
+                updateButtonStates();
+                return;
+            }
+
+            // Use TextDecoderStream for easier text handling
+            const textDecoder = new TextDecoderStream();
+            const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+            reader = textDecoder.readable.getReader();
+
+            updateStatus('Reading data...', 'connected');
+
+            try {
+                while (keepReading) {
+                    const { value, done } = await reader.read();
+                    if (done) {
+                        // Allow the serial port to be closed later.
+                        reader.releaseLock();
+                        break;
+                    }
+                    if (value) {
+                        // Process the incoming chunk
+                        processIncomingData(value);
+                    }
+                }
+            } catch (error) {
+                console.error('Error during reading:', error);
+                showError(`Read error: ${error.message}`);
+                updateStatus('Read error', 'error');
+                // Attempt to clean up
+                try {
+                   await reader.cancel();
+                   reader.releaseLock(); // Release lock on error
+                } catch (cancelError) {
+                    console.error('Error cancelling reader:', cancelError);
+                }
+                // Don't close the port here immediately, let disconnect handle it
+                // await disconnectSerial(); // Maybe disconnect on read error?
+            } finally {
+                 // Ensure the lock is always released if the loop terminates unexpectedly
+                if (reader && !reader.closed) {
+                    try {
+                        reader.releaseLock();
+                    } catch(e) {
+                        console.warn("Error releasing reader lock in finally:", e);
+                    }
+                }
+            }
+             // If keepReading became false, it means disconnect was called.
+             // If the loop exited due to 'done', the port might have closed.
+            if (!keepReading) {
+                await disconnectSerial(); // Ensure cleanup if disconnect was initiated
+            } else {
+                 updateStatus('Reading stopped (port closed?)', 'disconnected');
+                 updateButtonStates();
+            }
+        }
+
+        function processIncomingData(chunk) {
+            incomingBuffer += chunk;
+            let newlineIndex;
+
+            // Process buffer line by line
+            while ((newlineIndex = incomingBuffer.indexOf('\n')) >= 0) {
+                const line = incomingBuffer.substring(0, newlineIndex).trim(); // Get line, remove trailing \r if present
+                incomingBuffer = incomingBuffer.substring(newlineIndex + 1); // Remove processed line from buffer
+
+                if (line) { // Only process non-empty lines
+                    parseAndStoreData(line);
+                }
+            }
+            // Keep any remaining partial line in the buffer for the next chunk
+        }
+
+        function parseAndStoreData(line) {
+            // console.log("Received line:", line); // Debugging
+            try {
+                const values = line.split(',')
+                                   .map(val => val.trim()) // Trim whitespace
+                                   .filter(val => val !== '') // Filter out empty strings potentially caused by trailing commas
+                                   .map(Number); // Convert to numbers
+
+                // Basic validation: Check if all are numbers and within range 0-360
+                const isValid = values.every(v => !isNaN(v) && v >= 0 && v <= 360);
+
+                if (!isValid) {
+                    console.warn("Invalid data received:", line, values);
+                    return; // Skip invalid lines silently or show a warning
+                }
+
+                // Determine expected data length from the first valid line during collection
+                if (isCollecting && expectedDataLength === -1 && values.length > 0) {
+                    expectedDataLength = values.length;
+                    console.log(`Determined expected data length: ${expectedDataLength}`);
+                }
+
+                // Store data only if collecting and matches expected length (if set)
+                if (isCollecting) {
+                     if (expectedDataLength === -1 || values.length === expectedDataLength) {
+                        collectedData.push(values);
+                        updateDataCount();
+                     } else {
+                         console.warn(`Data length mismatch. Expected ${expectedDataLength}, got ${values.length}. Line: "${line}"`);
+                     }
+                }
+
+            } catch (parseError) {
+                console.error("Error parsing line:", line, parseError);
+                // Optionally show a persistent error or warning
+            }
+        }
+
+
+        async function disconnectSerial() {
+            keepReading = false; // Signal the read loop to stop
+
+            if (reader) {
+                try {
+                    await reader.cancel(); // Cancel any pending reads
+                    // The releaseLock should happen in the readLoop's finally block
+                } catch (err) {
+                    console.error('Error cancelling reader:', err);
+                    showError(`Error cancelling reader: ${err.message}`);
+                }
+                reader = null;
+            }
+
+            if (port && port.readable) {
+                 // The read loop should release the lock. Wait a moment just in case.
+                await new Promise(resolve => setTimeout(resolve, 100));
+                try {
+                    await port.close();
+                    console.log("Serial port closed.");
+                } catch (err) {
+                    console.error('Error closing port:', err);
+                     // Ignore errors if the port is already closed or closing.
+                    if (!err.message.includes("port is already closed")) {
+                       showError(`Error closing port: ${err.message}`);
+                    }
+                }
+            }
+
+            port = null;
+            updateStatus('Disconnected', 'disconnected');
+            updateButtonStates();
+        }
+
+
+        // --- Data Collection ---
+        function startCollection() {
+            if (!port || !port.readable) {
+                showError("Not connected to a serial device.");
+                return;
+            }
+            if (isCollecting) return; // Already collecting
+
+            hideError();
+            collectedData = []; // Clear previous data
+            expectedDataLength = -1; // Reset expected length
+            updateDataCount();
+            isCollecting = true;
+            collectionStartTime = Date.now();
+            const durationSeconds = parseInt(collectDurationInput.value, 10);
+            const durationMs = durationSeconds * 1000;
+
+            updateStatus(`Collecting data for ${durationSeconds}s...`, 'collecting');
+            updateButtonStates();
+
+            // Stop collection after the specified duration
+            clearTimeout(collectionTimerId); // Clear any previous timer
+            collectionTimerId = setTimeout(stopCollection, durationMs);
+
+            // Clear the canvas when starting new collection
+            if (p5Instance) {
+                 p5Instance.clearCanvas(); // Use a custom clear function if needed
+            }
+        }
+
+        function stopCollection() {
+            if (!isCollecting) return; // Not collecting
+
+            isCollecting = false;
+            clearTimeout(collectionTimerId); // Clear timer in case stopped manually
+            const collectionEndTime = Date.now();
+            const actualDuration = ((collectionEndTime - collectionStartTime) / 1000).toFixed(1);
+
+            updateStatus(`Collection finished (${actualDuration}s). ${collectedData.length} points captured.`, 'finished');
+            updateButtonStates();
+
+            // Trigger redraw in p5 sketch
+            if (p5Instance) {
+                p5Instance.redraw();
+            }
+        }
+
+        // --- P5 Sketch Definition ---
+        const sketch = (p) => {
+            let canvasWidth = 600;
+            let canvasHeight = 400;
+
+            // Visualization functions are defined within the sketch scope
+            const visualizations = {
+                lines: (data) => {
+                    p.stroke(0, 100, 200, 150); // Blueish lines
+                    p.strokeWeight(1);
+                    p.noFill();
+
+                    if (data.length === 0 || data[0].length === 0) return; // No data
+
+                    const numLines = data[0].length;
+                    const spacing = p.width / (data.length -1 || 1); // Avoid division by zero if only 1 point
+
+                    for (let j = 0; j < numLines; j++) {
+                        p.beginShape();
+                        for (let i = 0; i < data.length; i++) {
+                            const x = i * spacing;
+                            // Map data value (0-360) to canvas height (with padding)
+                            const y = p.map(data[i][j] || 0, 0, 360, p.height - 20, 20); // Use || 0 for safety
+                            p.vertex(x, y);
+                        }
+                        p.endShape();
+                    }
+                     // Draw axes/labels (optional)
+                    p.stroke(150);
+                    p.strokeWeight(0.5);
+                    p.line(0, p.height - 20, p.width, p.height - 20); // X-axis (bottom)
+                    p.line(0, 20, p.width, 20); // Top guide
+                    p.textAlign(p.LEFT, p.CENTER);
+                    p.noStroke();
+                    p.fill(100);
+                    p.text('0', 5, p.height - 20);
+                    p.text('360', 5, 20);
+                },
+
+                circles: (data) => {
+                    p.noStroke();
+                    if (data.length === 0 || data[0].length === 0) return;
+
+                    const numStreams = data[0].length;
+                    const maxRadius = p.min(p.width, p.height) / 2 * 0.8; // Max radius for largest circle
+                    const centerX = p.width / 2;
+                    const centerY = p.height / 2;
+
+                    // Use the *last* data point for the visualization
+                    const lastDataPoint = data[data.length - 1];
+
+                    for (let i = 0; i < numStreams; i++) {
+                        const value = lastDataPoint[i] || 0;
+                        const radius = p.map(value, 0, 360, 0, maxRadius);
+                        // Assign different colors based on index
+                        p.fill((i * 60) % 255, 150, 200, 100); // Vary hue, semi-transparent
+                        p.ellipse(centerX, centerY, radius * 2, radius * 2);
+                    }
+                     // Add labels (optional)
+                    p.fill(0);
+                    p.textAlign(p.CENTER, p.CENTER);
+                    p.text(`Last reading: ${lastDataPoint.map(v => v.toFixed(0)).join(', ')}`, centerX, p.height - 20);
+                },
+
+                radial: (data) => {
+                    p.strokeWeight(2);
+                    if (data.length === 0 || data[0].length === 0) return;
+
+                    const numStreams = data[0].length;
+                    const centerX = p.width / 2;
+                    const centerY = p.height / 2;
+                    const maxLen = p.min(p.width, p.height) / 2 * 0.8;
+                    const angleStep = p.TWO_PI / data.length; // Angle per data point over time
+
+                    for (let j = 0; j < numStreams; j++) {
+                        // Assign color based on stream index
+                        p.stroke((j * 70) % 360, 80, 70); // HSB color mode
+
+                        for (let i = 0; i < data.length; i++) {
+                            const value = data[i][j] || 0;
+                            const len = p.map(value, 0, 360, 0, maxLen);
+                            const angle = i * angleStep - p.HALF_PI; // Start from top
+
+                            const x = centerX + p.cos(angle) * len;
+                            const y = centerY + p.sin(angle) * len;
+
+                            // Draw a line from center to point for each reading
+                            p.line(centerX, centerY, x, y);
+                        }
+                    }
+                },
+                // --- Add more visualization functions here ---
+                stackedBars: (data) => {
+                    p.noStroke();
+                    if (data.length === 0 || data[0].length === 0) return;
+
+                    const numDataPoints = data.length;
+                    const numStreams = data[0].length;
+                    const barWidth = p.width / numDataPoints;
+                    const maxPossibleTotalValue = numStreams * 360; // Assuming max value per sensor is 360
+
+                    for (let i = 0; i < numDataPoints; i++) {
+                        let currentY = p.height; // Start drawing from the bottom
+                        let totalValue = 0;
+                        // Calculate total value for this time step first
+                        for (let j = 0; j < numStreams; j++) {
+                            totalValue += data[i][j] || 0;
+                        }
+
+                        // Map the total value to the bar's total height
+                        const totalBarHeight = p.map(totalValue, 0, maxPossibleTotalValue, 0, p.height);
+
+                        // Now draw segments, scaling them relative to the totalBarHeight
+                        let segmentStartY = p.height;
+                        for (let j = 0; j < numStreams; j++) {
+                            const value = data[i][j] || 0;
+                            // Calculate segment height as a proportion of the totalBarHeight
+                            const segmentHeight = (totalValue > 0) ? (value / totalValue) * totalBarHeight : 0;
+
+                            // Assign color based on stream index (using HSB)
+                            p.fill((j * (360 / (numStreams + 1))) % 360, 80, 90); // Spread hues
+
+                            // Draw the rectangle segment
+                            p.rect(i * barWidth, segmentStartY - segmentHeight, barWidth, segmentHeight);
+
+                            // Update the starting Y for the next segment
+                            segmentStartY -= segmentHeight;
+                        }
+                    }
+
+                    // Optional: Add labels or legend
+                    p.fill(50); // Dark grey text
+                    p.textAlign(p.LEFT, p.TOP); // Align to top left
+                    p.text(`Showing ${numDataPoints} time steps as stacked bars.`, 5, 5); // Position at top left
+                }
+                // e.g., histogram, heatmap, etc.
+                // Each function should accept 'data' (the collectedData array)
+                // and use p5 drawing functions.
+            };
+
+            p.setup = () => {
+                // Dynamically determine canvas size based on container?
+                // For now, fixed size.
+                canvasWidth = canvasContainer.offsetWidth > 100 ? canvasContainer.offsetWidth : 600; // Ensure minimum width
+                canvasHeight = 400;
+                let cnv = p.createCanvas(canvasWidth, canvasHeight);
+                cnv.parent('canvasContainer'); // Attach canvas to the div
+                p.colorMode(p.HSB, 360, 100, 100, 1.0); // Use HSB for easier color manipulation
+                p.noLoop(); // Only redraw when needed (e.g., after collection)
+                p.background(250); // Light grey background
+                p.textAlign(p.CENTER, p.CENTER);
+                p.text('Connect device and collect data to visualize.', p.width / 2, p.height / 2);
+            };
+
+            p.draw = () => {
+                p.background(255); // Clear background each draw
+
+                if (isCollecting) {
+                    p.fill(150);
+                    p.noStroke();
+                    p.textAlign(p.CENTER, p.CENTER);
+                    p.text('Collecting data...', p.width / 2, p.height / 2);
+                } else if (collectedData.length > 0) {
+                     // Check if the selected visualization function exists
+                    if (visualizations[currentVisualization]) {
+                        try {
+                            visualizations[currentVisualization](collectedData);
+                        } catch(visError) {
+                             console.error(`Error in visualization '${currentVisualization}':`, visError);
+                             p.fill(255,0,0); // Red for error
+                             p.noStroke();
+                             p.textAlign(p.CENTER, p.CENTER);
+                             p.text(`Error rendering visualization: ${visError.message}`, p.width/2, p.height/2);
+                        }
+                    } else {
+                        p.fill(200, 0, 0); // Indicate error - unknown viz
+                        p.noStroke();
+                        p.textAlign(p.CENTER, p.CENTER);
+                        p.text(`Unknown visualization: ${currentVisualization}`, p.width / 2, p.height / 2);
+                    }
+                } else {
+                    // No data collected yet or cleared
+                    p.fill(180);
+                    p.noStroke();
+                    p.textAlign(p.CENTER, p.CENTER);
+                    p.text('No data collected. Connect and press "Start Collection".', p.width / 2, p.height / 2);
+                }
+            };
+
+             // Custom function to clear canvas, called before starting collection
+            p.clearCanvas = () => {
+                p.background(255); // Clear with white
+                p.fill(180);
+                p.noStroke();
+                p.textAlign(p.CENTER, p.CENTER);
+                p.text('Ready to collect data...', p.width / 2, p.height / 2);
+                // p.redraw(); // Redraw immediately to show the cleared state
+            };
+
+            // Optional: Handle window resize
+            p.windowResized = () => {
+                 canvasWidth = canvasContainer.offsetWidth > 100 ? canvasContainer.offsetWidth : 600;
+                 p.resizeCanvas(canvasWidth, canvasHeight); // Adjust height if needed too
+                 p.redraw(); // Redraw with new size
+            };
+        };
+
+        // --- Event Listeners ---
+        connectButton.addEventListener('click', async () => {
+            if (port) {
+                await disconnectSerial(); // Disconnect if already connected (button logic should prevent this state ideally)
+            } else {
+                await connectSerial();
+            }
+             // Re-initialize p5 if needed, or ensure it's ready
+            if (!p5Instance) {
+                 p5Instance = new p5(sketch);
+            }
+        });
+
+        startButton.addEventListener('click', startCollection);
+        stopButton.addEventListener('click', stopCollection);
+
+        vizSelect.addEventListener('change', (event) => {
+            currentVisualization = event.target.value;
+            if (p5Instance && collectedData.length > 0 && !isCollecting) {
+                p5Instance.redraw(); // Redraw with the new visualization if data exists and not collecting
+            } else if (p5Instance && !isCollecting) {
+                 // Optionally clear or show default message if no data
+                 p5Instance.clearCanvas(); // Or redraw to show 'no data' message for the new viz type
+                 p.background(255);
+                 p.fill(180);
+                 p.noStroke();
+                 p.textAlign(p.CENTER, p.CENTER);
+                 p.text(`Switched to ${currentVisualization}. Collect data to view.`, p.width / 2, p.height / 2);
+
+            }
+        });
+
+        // Initialize button states on load
+        updateButtonStates();
+        // Initialize p5.js instance on load
+        p5Instance = new p5(sketch);
+
+    </script>
+
+</body>
+</html>
