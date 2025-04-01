@@ -428,7 +428,6 @@
                     p.textAlign(p.CENTER, p.CENTER);
                     p.text(`Last reading: ${lastDataPoint.map(v => v.toFixed(0)).join(', ')}`, centerX, p.height - 20);
                 },
-
                 radial: (data) => {
                     p.strokeWeight(2);
                     if (data.length === 0 || data[0].length === 0) return;
@@ -456,7 +455,6 @@
                         }
                     }
                 },
-                // --- Add more visualization functions here ---
                 stackedBars: (data) => {
                     p.noStroke();
                     if (data.length === 0 || data[0].length === 0) return;
