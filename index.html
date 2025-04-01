@@ -68,7 +68,9 @@
                     <option value="circles">Circular Plot</option>
                     <option value="radial">Radial Bars</option>
                     <option value="stackedBars">Stacked Bars</option>
-                    </select>
+                    <option value="histogram">Histogram (Stream 1)</option>
+                    <option value="heatmap">Heatmap</option>
+                </select>
             </div>
         </div>
 
@@ -241,7 +243,7 @@
         }
 
         function parseAndStoreData(line) {
-            // console.log("Received line:", line); // Debugging
+             //console.log("Received line:", line); // Debugging
             try {
                 const values = line.split(',')
                                    .map(val => val.trim()) // Trim whitespace
@@ -327,7 +329,7 @@
             expectedDataLength = -1; // Reset expected length
             updateDataCount();
             isCollecting = true;
-            collectionStartTime = Date.now();
+            collectionStartTime = Date.now(); // Record start time accurately
             const durationSeconds = parseInt(collectDurationInput.value, 10);
             const durationMs = durationSeconds * 1000;
 
@@ -338,9 +340,10 @@
             clearTimeout(collectionTimerId); // Clear any previous timer
             collectionTimerId = setTimeout(stopCollection, durationMs);
 
-            // Clear the canvas when starting new collection
+            // Prepare p5 canvas for live drawing
             if (p5Instance) {
-                 p5Instance.clearCanvas(); // Use a custom clear function if needed
+                 p5Instance.background(240); // Clear background once with a light grey
+                 p5Instance.loop(); // Start the p5 draw loop
             }
         }
 
@@ -355,9 +358,10 @@
             updateStatus(`Collection finished (${actualDuration}s). ${collectedData.length} points captured.`, 'finished');
             updateButtonStates();
 
-            // Trigger redraw in p5 sketch
+            // Stop the p5 draw loop and trigger a final draw for the selected post-collection visualization
             if (p5Instance) {
-                p5Instance.redraw();
+                p5Instance.noLoop();
+                p5Instance.redraw(); // Redraw one last time with the selected visualization
             }
         }
 
@@ -495,10 +499,145 @@
                     p.fill(50); // Dark grey text
                     p.textAlign(p.LEFT, p.TOP); // Align to top left
                     p.text(`Showing ${numDataPoints} time steps as stacked bars.`, 5, 5); // Position at top left
+                },
+                histogram: (data) => {
+                    p.stroke(100); // Light grey border for bars
+                    p.strokeWeight(0.5);
+                    if (data.length === 0 || data[0].length === 0) {
+                        p.fill(150);
+                        p.noStroke();
+                        p.textAlign(p.CENTER, p.CENTER);
+                        p.text('No data for histogram.', p.width / 2, p.height / 2);
+                        return;
+                    }
+
+                    const numBins = 12; // How many bins to divide 0-360 into (e.g., 12 bins of 30 degrees)
+                    const binWidthValue = 360 / numBins; // The range of values each bin covers
+                    let binCounts = new Array(numBins).fill(0); // Initialize counts to zero
+
+                    // --- Data Processing: Count values into bins ---
+                    // We'll analyze the *first* data stream (index 0)
+                    for (let i = 0; i < data.length; i++) {
+                        const value = data[i][0] || 0; // Get value from the first stream
+                        // Ensure value is within expected range (clamp just in case)
+                        const clampedValue = p.constrain(value, 0, 359.999); // Use 359.999 to keep 360 out of bounds for bin index calc
+                        const binIndex = Math.floor(clampedValue / binWidthValue);
+                        if (binIndex >= 0 && binIndex < numBins) {
+                            binCounts[binIndex]++;
+                        } else {
+                             console.warn(`Value ${value} resulted in unexpected bin index ${binIndex}`);
+                        }
+                    }
+
+                    // --- Drawing ---
+                    let maxCount = 0;
+                    for (let count of binCounts) {
+                        if (count > maxCount) {
+                            maxCount = count;
+                        }
+                    }
+
+                    if (maxCount === 0) {
+                         p.fill(150);
+                         p.noStroke();
+                         p.textAlign(p.CENTER, p.CENTER);
+                         p.text('No data points found in the expected range for Stream 1.', p.width / 2, p.height / 2);
+                         return;
+                    }
+
+                    const barWidthPixels = p.width / numBins;
+                    p.fill(0, 80, 80); // Use HSB color (Reddish)
+
+                    for (let b = 0; b < numBins; b++) {
+                        // Map the count in this bin to a height on the canvas
+                        // Map range [0, maxCount] to [0, p.height]
+                        const barHeight = p.map(binCounts[b], 0, maxCount, 0, p.height);
+
+                        const x = b * barWidthPixels;
+                        const y = p.height - barHeight; // Y position starts from bottom
+
+                        p.rect(x, y, barWidthPixels, barHeight);
+
+                        // Optional: Add labels for bins
+                        p.fill(50); // Dark text
+                        p.noStroke();
+                        p.textAlign(p.CENTER, p.BOTTOM);
+                        const binStart = Math.round(b * binWidthValue);
+                        const binEnd = Math.round((b + 1) * binWidthValue);
+                        // Only draw label if bar has some width
+                        if (barWidthPixels > 20) {
+                             p.text(`${binStart}-${binEnd}`, x + barWidthPixels / 2, p.height - 5);
+                        }
+                         p.fill(0, 80, 80); // Reset fill for next bar
+                         p.stroke(100); // Reset stroke for next bar
+                    }
+
+                     // Add overall title/info
+                     p.fill(50);
+                     p.noStroke();
+                     p.textAlign(p.LEFT, p.TOP);
+                     p.text(`Histogram of Stream 1 values (${data.length} points, max count: ${maxCount})`, 5, 5);
+                },
+                heatmap: (data) => {
+                    p.noStroke(); // No borders for the cells initially
+                    if (data.length === 0 || data[0].length === 0) {
+                        p.fill(150);
+                        p.textAlign(p.CENTER, p.CENTER);
+                        p.text('No data for heatmap.', p.width / 2, p.height / 2);
+                        return;
+                    }
+
+                    const numTimeSteps = data.length;
+                    const numStreams = data[0].length;
+
+                    // Calculate the size of each cell to fit the canvas
+                    const cellWidth = p.width / numTimeSteps;
+                    const cellHeight = p.height / numStreams;
+
+                    // --- Draw the heatmap cells ---
+                    for (let i = 0; i < numTimeSteps; i++) { // Iterate through time (columns)
+                        for (let j = 0; j < numStreams; j++) { // Iterate through streams (rows)
+                            const value = data[i][j] || 0;
+
+                            // Map the value (0-360) to a color hue (e.g., blue to red)
+                            // Using HSB: Hue from 240 (blue) down to 0 (red)
+                            const hue = p.map(value, 0, 360, 240, 0);
+                            p.fill(hue, 90, 90); // Saturation and Brightness set to 90
+
+                            // Calculate position
+                            const x = i * cellWidth;
+                            const y = j * cellHeight;
+
+                            // Draw the rectangle cell
+                            p.rect(x, y, cellWidth, cellHeight);
+                        }
+                    }
+
+                    // --- Optional: Add labels or grid lines if cells are large enough ---
+                    if (cellHeight > 15) { // Only add stream labels if cells are tall enough
+                        p.fill(0); // Black text
+                        p.textAlign(p.LEFT, p.CENTER);
+                        p.textSize(p.constrain(cellHeight * 0.6, 8, 14)); // Scale text size
+                        for (let j = 0; j < numStreams; j++) {
+                            p.text(`S${j+1}`, 5, j * cellHeight + cellHeight / 2);
+                        }
+                    }
+                     if (cellWidth > 30) { // Only add time labels if cells are wide enough
+                         p.fill(0);
+                         p.textAlign(p.CENTER, p.TOP);
+                         p.textSize(p.constrain(cellWidth * 0.2, 8, 12));
+                         for (let i = 0; i < numTimeSteps; i+= Math.max(1, Math.floor(numTimeSteps/10))) { // Label ~10 steps
+                             p.text(`${i}`, i * cellWidth + cellWidth / 2, 5);
+                         }
+                     }
+
+                     // Add overall title
+                     p.fill(50);
+                     p.noStroke();
+                     p.textAlign(p.CENTER, p.BOTTOM);
+                     p.textSize(12);
+                     p.text(`Heatmap: ${numStreams} streams over ${numTimeSteps} time steps`, p.width / 2, p.height - 5);
                 }
-                // e.g., histogram, heatmap, etc.
-                // Each function should accept 'data' (the collectedData array)
-                // and use p5 drawing functions.
             };
 
             p.setup = () => {
@@ -509,21 +648,64 @@
                 let cnv = p.createCanvas(canvasWidth, canvasHeight);
                 cnv.parent('canvasContainer'); // Attach canvas to the div
                 p.colorMode(p.HSB, 360, 100, 100, 1.0); // Use HSB for easier color manipulation
-                p.noLoop(); // Only redraw when needed (e.g., after collection)
-                p.background(250); // Light grey background
+                p.noLoop(); // Start paused
+                p.background(250);
                 p.textAlign(p.CENTER, p.CENTER);
                 p.text('Connect device and collect data to visualize.', p.width / 2, p.height / 2);
             };
 
             p.draw = () => {
-                p.background(255); // Clear background each draw
-
                 if (isCollecting) {
-                    p.fill(150);
+                    // --- Live Visualization Logic ---
+                    if (collectedData.length === 0 || expectedDataLength <= 0) {
+                        // Optional: display a waiting message briefly if needed
+                        // p.background(240); // Keep clearing if no data yet? Or just let the initial clear suffice.
+                        // p.fill(150);
+                        // p.text('Waiting for first data...', p.width / 2, p.height / 2);
+                        return; // Wait for the first valid data point
+                    }
+
+                    const latestData = collectedData[collectedData.length - 1];
+                    if (!latestData || latestData.length !== expectedDataLength) return; // Safety check
+
+                    const numStreams = expectedDataLength;
+                    const durationSeconds = parseInt(collectDurationInput.value, 10);
+                    const durationMs = durationSeconds * 1000;
+                    const elapsedMs = Date.now() - collectionStartTime;
+                    const progress = p.constrain(elapsedMs / durationMs, 0, 1);
+
+                    // Calculate Y position: Starts at the bottom (p.height) and moves to the top (0)
+                    const currentY = p.map(progress, 0, 1, p.height, 0);
+                    const boxHeight = 2; // Height of each data strip
+
+                    let currentX = 0;
                     p.noStroke();
-                    p.textAlign(p.CENTER, p.CENTER);
-                    p.text('Collecting data...', p.width / 2, p.height / 2);
+
+                    for (let j = 0; j < numStreams; j++) {
+                        const value = latestData[j] || 0;
+
+                        // Width: Map value to a pixel width (e.g., max 60px per sensor)
+                        // Adjust the '60' if you have many sensors or want wider boxes
+                        const maxBoxWidth = p.width / numStreams; // Distribute width evenly as max
+                        const boxWidth = p.map(value, 0, 360, 0, maxBoxWidth);
+
+                        // Hue: Map value to color (e.g., blue for low, red for high)
+                        const hue = p.map(value, 0, 360, 240, 0);
+                        p.fill(hue, 90, 90); // HSB color
+
+                        // Draw the rectangle for this sensor's value
+                        // Draw it ending at currentY, extending upwards by boxHeight
+                        if (boxWidth > 0) {
+                           p.rect(currentX, currentY - boxHeight, boxWidth, boxHeight);
+                        }
+
+                        // Update X position for the next box
+                        currentX += boxWidth;
+                    }
+
                 } else if (collectedData.length > 0) {
+                    // --- Post-Collection Visualization Logic (Existing) ---
+                    p.background(255); // Clear background for final visualization
                      // Check if the selected visualization function exists
                     if (visualizations[currentVisualization]) {
                         try {
@@ -542,7 +724,9 @@
                         p.text(`Unknown visualization: ${currentVisualization}`, p.width / 2, p.height / 2);
                     }
                 } else {
-                    // No data collected yet or cleared
+                    // --- Initial/No Data State (Existing) ---
+                    // Ensure background is cleared if we came from a collection state
+                    p.background(255);
                     p.fill(180);
                     p.noStroke();
                     p.textAlign(p.CENTER, p.CENTER);
