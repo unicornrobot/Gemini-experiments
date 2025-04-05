@@ -105,6 +105,8 @@
         let collectionTimerId;
         let collectedData = []; // Array to store collected data [[val1, val2,...], [val1, val2,...]]
         let expectedDataLength = -1; // To store the number of values per line, determined by first valid data line
+        let lastValidProgress = 0;
+        let absoluteLatestData = null; // Store the very last parsed data line
 
         let p5Instance; // To hold the p5 sketch instance
         let currentVisualization = 'lines'; // Default FINAL visualization
@@ -255,40 +257,52 @@
         }
 
         function parseAndStoreData(line) {
-             //console.log("Received line:", line); // Debugging
+            const threshold = 20;
+
             try {
                 const values = line.split(',')
                                    .map(val => val.trim()) // Trim whitespace
                                    .filter(val => val !== '') // Filter out empty strings potentially caused by trailing commas
                                    .map(Number); // Convert to numbers
 
-                // Basic validation: Check if all are numbers and within range 0-360
-                const isValid = values.every(v => !isNaN(v) && v >= 0 && v <= 360);
-
-                if (!isValid) {
-                    console.warn("Invalid data received:", line, values);
-                    return; // Skip invalid lines silently or show a warning
+                // --- Store the absolute latest valid format data ---
+                // We do this BEFORE threshold check for particle emitters
+                const isValidFormat = values.every(v => !isNaN(v) && v >= 0 && v <= 360);
+                if (isValidFormat && values.length > 0) {
+                     absoluteLatestData = values; // Update latest data
+                     // Also set expected length here if not set yet, based on any valid line
+                     if (isCollecting && expectedDataLength === -1) {
+                         expectedDataLength = values.length;
+                         console.log(`Determined expected data length: ${expectedDataLength}`);
+                     }
+                } else if (!isValidFormat) {
+                    console.warn("Invalid data format received:", line, values);
+                     return; // Skip further processing for this line
                 }
+                // ----------------------------------------------------
 
-                // Determine expected data length from the first valid line during collection
-                if (isCollecting && expectedDataLength === -1 && values.length > 0) {
-                    expectedDataLength = values.length;
-                    console.log(`Determined expected data length: ${expectedDataLength}`);
-                }
 
-                // Store data only if collecting and matches expected length (if set)
-                if (isCollecting) {
-                     if (expectedDataLength === -1 || values.length === expectedDataLength) {
+                // Check threshold
+                const meetsThreshold = values.some(v => v > threshold);
+
+                // Store in collectedData only if collecting, meets threshold, and matches length
+                if (isCollecting && meetsThreshold) {
+                    if (values.length === expectedDataLength) {
                         collectedData.push(values);
                         updateDataCount();
-                     } else {
+                        const durationMs = parseInt(collectDurationInput.value, 10) * 1000;
+                        if (durationMs > 0) {
+                             lastValidProgress = (Date.now() - collectionStartTime) / durationMs;
+                             lastValidProgress = Math.min(lastValidProgress, 1);
+                        }
+                    } else if (expectedDataLength !== -1) { // Only warn if length is set
                          console.warn(`Data length mismatch. Expected ${expectedDataLength}, got ${values.length}. Line: "${line}"`);
-                     }
+                    }
                 }
+                 // else: Data below threshold or not collecting, don't add to collectedData
 
             } catch (parseError) {
-                console.error("Error parsing line:", line, parseError);
-                // Optionally show a persistent error or warning
+                 console.error("Error parsing line:", line, parseError);
             }
         }
 
@@ -337,11 +351,13 @@
             if (isCollecting) return; // Already collecting
 
             hideError();
-            collectedData = []; // Clear previous data
-            expectedDataLength = -1; // Reset expected length
+            collectedData = [];
+            expectedDataLength = -1;
+            lastValidProgress = 0;
+            absoluteLatestData = null; // Reset latest data tracker too
             updateDataCount();
             isCollecting = true;
-            collectionStartTime = Date.now(); // Record start time accurately
+            collectionStartTime = Date.now();
             const durationSeconds = parseInt(collectDurationInput.value, 10);
             const durationMs = durationSeconds * 1000;
 
@@ -718,44 +734,37 @@
 
                  if (isCollecting) {
                      // --- Live Visualization Logic ---
-                     // Check if we have *any* data and if expectedDataLength has been determined
-                     if (collectedData.length === 0 || expectedDataLength <= 0) {
-                         // Optionally display a waiting message, but ensure no drawing commands interfere
-                         // Example: Draw only text if waiting
-                         // p.fill(150); p.noStroke();
-                         // p.text("Waiting for data...", p.width/2, p.height/2);
-                         return; // Wait for the first valid data point AND expected length
+                     // Check only if we have at least one *valid* data point stored
+                     if (collectedData.length === 0) {
+                         // If no valid data yet, just wait. Canvas was cleared in startCollection.
+                         return; // Wait for the first valid data point
                      }
 
-                     const latestData = collectedData[collectedData.length - 1];
-                     // Additional check: Ensure latestData matches expected length
-                     if (!latestData || latestData.length !== expectedDataLength) {
-                        console.warn("Data mismatch or not ready, skipping frame.");
-                        return; // Skip frame if data isn't consistent yet
-                     }
+                     // We have at least one valid point, get the latest *valid* one
+                     const latestValidData = collectedData[collectedData.length - 1];
 
-                     // Now we know expectedDataLength > 0 and latestData is valid
-                     const numStreams = expectedDataLength; // Can safely use numStreams now if preferred
-                     const durationSeconds = parseInt(collectDurationInput.value, 10);
-                     const durationMs = durationSeconds * 1000;
-                     const elapsedMs = Date.now() - collectionStartTime;
-                     const progress = p.constrain(elapsedMs / durationMs, 0, 1);
+                     // Now we know expectedDataLength > 0 because valid data exists
+                     const numStreams = expectedDataLength;
 
                      // --- Select live visualization based on dropdown ---
                      switch (currentLiveVisualization) {
                          case 'centeredStrips':
                              // --- Centered Strips Logic ---
                              // **NO p.background() call here**
-                             const currentY = p.map(progress, 0, 1, p.height, 0);
-                             const boxHeight = 2;
+
+                             const boxHeight = 2; // Height of each data strip
+
+                             // Calculate Y position based on the COUNT of valid points stored
+                             // The Nth point (where N = collectedData.length) has its top edge at:
+                             const topEdgeY = p.height - (collectedData.length * boxHeight);
 
                              let totalActualWidth = 0;
                              let actualBoxWidths = [];
-                             // Use numStreams (which is confirmed > 0 expectedDataLength here)
                              const maxBoxWidthPerStream = p.width / numStreams;
 
+                             // Use the latest VALID data point for drawing width/color
                              for (let j = 0; j < numStreams; j++) {
-                                 const value = latestData[j] || 0;
+                                 const value = latestValidData[j] || 0; // Use latestValidData
                                  const boxWidth = p.map(value, 0, 360, 0, maxBoxWidthPerStream);
                                  actualBoxWidths.push(boxWidth);
                                  totalActualWidth += boxWidth;
@@ -766,12 +775,14 @@
 
                              p.noStroke();
                              for (let j = 0; j < numStreams; j++) {
-                                 const value = latestData[j] || 0;
+                                 const value = latestValidData[j] || 0; // Use latestValidData again
                                  const boxWidth = actualBoxWidths[j];
                                  const hue = p.map(value, 0, 360, 240, 0);
-                                 p.fill(hue, 90, 90); // Set fill for this strip segment
+                                 p.fill(hue, 90, 90);
                                  if (boxWidth > 0) {
-                                     p.rect(currentX, currentY - boxHeight, boxWidth, boxHeight);
+                                     // Draw the strip for the latest valid data point at the Y
+                                     // position corresponding to its count.
+                                     p.rect(currentX, topEdgeY, boxWidth, boxHeight);
                                  }
                                  currentX += boxWidth;
                              }
@@ -779,54 +790,71 @@
 
                          case 'particleEmitters':
                               // --- Particle Emitter Logic ---
+                              // This logic still runs every frame based on the *absolute latest* data
+                              // received (via parseAndStoreData triggering redraw indirectly),
+                              // regardless of the threshold, as it doesn't rely on collectedData history.
+                              // Fetch the absolute latest data point processed (careful if parsing is slow)
+                              // We need a way to get the *very* last parsed line, not just the last *stored* one.
+                              // Let's modify parseAndStoreData slightly to store the absolute latest line.
+
+                              // *** Need to adjust parseAndStoreData and add a new global variable ***
+                              // *** See adjustment below ***
+
                               p.background(0, 0, 10, 0.1); // Trail effect
 
-                              // Use a distinct variable name for clarity
-                              const numEmitterStreams = latestData.length; // Should equal numStreams here
+                              if (!absoluteLatestData || absoluteLatestData.length !== expectedDataLength) {
+                                  // If expected length isn't set or latest data is bad, skip particle frame
+                                  break;
+                              }
+
+                              const numEmitterStreams = absoluteLatestData.length;
 
                               for (let j = 0; j < numEmitterStreams; j++) {
-                                  const value = latestData[j] || 0;
-                                  const emitterX = p.map(j, 0, numEmitterStreams - 1 || 1, p.width * 0.1, p.width * 0.9);
-                                  const emitterY = p.height / 2;
-                                  const emissionRate = p.map(value, 0, 360, 0, 3);
-                                  const hue = p.map(value, 0, 360, 240, 0);
-                                  const col = p.color(hue, 90, 90);
-                                  const initialSpeed = 2;
-                                  const lifespan = 80;
+                                  const value = absoluteLatestData[j] || 0; // Use absolute latest
+                                  // ... (rest of emitter calculations: emitterX, Y, rate, hue, etc.) ...
+                                   const emitterX = p.map(j, 0, numEmitterStreams - 1 || 1, p.width * 0.1, p.width * 0.9);
+                                   const emitterY = p.height / 2;
+                                   const emissionRate = p.map(value, 0, 360, 0, 3);
+                                   const hue = p.map(value, 0, 360, 240, 0);
+                                   const col = p.color(hue, 90, 90);
+                                   const initialSpeed = 2;
+                                   const lifespan = 80;
 
-                                  for (let i = 0; i < emissionRate; i++) {
-                                      let angle = p.random(p.TWO_PI);
-                                      let vx = p.cos(angle) * initialSpeed;
-                                      let vy = p.sin(angle) * initialSpeed;
-                                      p.sketchInstanceVariables.particles.push(new Particle(emitterX, emitterY, vx, vy, lifespan, col));
-                                  }
+                                   for (let i = 0; i < emissionRate; i++) {
+                                       // ... (create particles) ...
+                                        let angle = p.random(p.TWO_PI);
+                                        let vx = p.cos(angle) * initialSpeed;
+                                        let vy = p.sin(angle) * initialSpeed;
+                                        p.sketchInstanceVariables.particles.push(new Particle(emitterX, emitterY, vx, vy, lifespan, col));
+                                   }
                               }
 
                               // Update and display all particles
                               for (let i = p.sketchInstanceVariables.particles.length - 1; i >= 0; i--) {
-                                  p.sketchInstanceVariables.particles[i].update();
-                                  p.sketchInstanceVariables.particles[i].display();
-                                  if (p.sketchInstanceVariables.particles[i].isDead()) {
-                                      p.sketchInstanceVariables.particles.splice(i, 1);
-                                  }
+                                  // ... (update, display, remove particles) ...
+                                   p.sketchInstanceVariables.particles[i].update();
+                                   p.sketchInstanceVariables.particles[i].display();
+                                   if (p.sketchInstanceVariables.particles[i].isDead()) {
+                                       p.sketchInstanceVariables.particles.splice(i, 1);
+                                   }
                               }
                               break; // End of particleEmitters case
 
                          case 'none':
                              // --- None Logic ---
-                              // **If this case is selected, need to ensure background is cleared**
-                              // Because 'centeredStrips' doesn't clear it.
-                              p.background(240); // Clear to default background color for 'none'
+                              p.background(240); // Clear background
+                              // Draw progress bar based on overall time progress
+                              const timeProgress = p.constrain((Date.now() - collectionStartTime) / (durationMs || 1), 0, 1);
                               p.noStroke();
                               p.fill(0, 0, 80);
                               p.rect(0, p.height - 5, p.width, 5);
                               p.fill(120, 80, 80);
-                              p.rect(0, p.height - 5, p.width * progress, 5);
+                              p.rect(0, p.height - 5, p.width * timeProgress, 5);
                               break; // End of none case
 
                          default:
-                            // **Also ensure background is cleared here if needed**
-                            p.background(240); // Clear for unknown viz state too
+                            // ... (default case with background clear) ...
+                            p.background(240);
                             p.fill(0);
                             p.textAlign(p.CENTER, p.CENTER);
                             p.text(`Unknown live viz: ${currentLiveVisualization}`, p.width/2, p.height/2);
