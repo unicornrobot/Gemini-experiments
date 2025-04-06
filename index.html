@@ -98,6 +98,14 @@
             </div>
             <!-- End Speed Slider Control -->
 
+            <!-- Add Opacity Slider Control -->
+            <div id="overlayOpacityControl" class="flex items-center gap-2" style="display: none;"> <!-- Hidden initially -->
+                 <label for="overlayOpacitySlider" class="text-sm font-medium text-gray-600">Overlay Opacity:</label>
+                 <input type="range" id="overlayOpacitySlider" min="0" max="1" value="0.7" step="0.05" class="w-32 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
+                 <span id="overlayOpacityValue" class="text-sm text-gray-500 w-8 text-right">0.7</span>
+            </div>
+            <!-- End Opacity Slider Control -->
+
         </div>
 
         <div id="status" class="status-indicator status-disconnected text-center mb-4">Status: Disconnected</div>
@@ -125,6 +133,7 @@
         let absoluteLatestData = null; // Store the very last parsed data line
         let collectIndefinitely = false; // Flag for indefinite collection
         let overlayDrawSpeed = 1.0; // Default drawing speed (pixels per frame)
+        let overlayDrawAlpha = 0.7; // Default drawing alpha (0.0 to 1.0)
         let overlayCurrentY = -1; // Current drawing Y position for overlay (-1 indicates reset needed)
 
         let p5Instance; // To hold the p5 sketch instance
@@ -143,9 +152,12 @@
         const errorDiv = document.getElementById('errorDisplay');
         const dataCountDiv = document.getElementById('dataCount');
         const canvasContainer = document.getElementById('canvasContainer');
-        const overlaySpeedControlDiv = document.getElementById('overlaySpeedControl'); // Add this
-        const overlaySpeedSlider = document.getElementById('overlaySpeedSlider'); // Add this
-        const overlaySpeedValueSpan = document.getElementById('overlaySpeedValue'); // Add this
+        const overlaySpeedControlDiv = document.getElementById('overlaySpeedControl');
+        const overlaySpeedSlider = document.getElementById('overlaySpeedSlider');
+        const overlaySpeedValueSpan = document.getElementById('overlaySpeedValue');
+        const overlayOpacityControlDiv = document.getElementById('overlayOpacityControl');
+        const overlayOpacitySlider = document.getElementById('overlayOpacitySlider');
+        const overlayOpacityValueSpan = document.getElementById('overlayOpacityValue');
 
         // --- Utility Functions ---
         function updateStatus(message, type) {
@@ -952,62 +964,50 @@
                               break; // End of particleEmitters case
 
                         case 'wovenTapestryOverlay':
-                            // --- Woven Tapestry (Overlay/Wrap) Logic with Speed Control ---
+                            // --- Woven Tapestry (Overlay/Wrap) Logic with Speed & Opacity Control ---
                             // **NO p.background() call here**
+                            if (!latestValidData || collectedData.length === 0) return;
+                            if (numStreams <= 0) break;
 
-                            // Check if we have valid data to draw
-                             if (!latestValidData || collectedData.length === 0) return;
-
-                             // Ensure numStreams is valid
-                             if (numStreams <= 0) break;
-
-                            const overlayWeftHeight = 4; // Fixed height for segments
+                            const overlayWeftHeight = 4;
+                            if (overlayWeftHeight <= 0) break;
+                            const maxVisibleRows = Math.floor(p.height / overlayWeftHeight);
+                            if (maxVisibleRows <= 0) break;
 
                             // --- Update and Wrap Y Position ---
-                            // Ensure Y is initialized (might not be if startCollection called before setup finished)
-                            if (overlayCurrentY === -1) {
-                                overlayCurrentY = p.height;
-                            }
-                            overlayCurrentY -= overlayDrawSpeed; // Move up based on speed
-                            if (overlayCurrentY < 0) { // Wrap around
-                                overlayCurrentY = p.height;
-                            }
-                            // Round Y to nearest int to potentially align better with pixels? Optional.
+                            if (overlayCurrentY === -1) overlayCurrentY = p.height;
+                            overlayCurrentY -= overlayDrawSpeed;
+                            if (overlayCurrentY < 0) overlayCurrentY = p.height;
                             const currentDrawY = Math.round(overlayCurrentY);
 
-                            // --- Calculate Proportional Widths for the latest point ---
+                            // --- Calculate Proportional Widths ---
                             let totalValueForRowOverlay = 0;
-                            for (let j = 0; j < numStreams; j++) {
-                                totalValueForRowOverlay += latestValidData[j] || 0;
-                            }
+                            for (let j = 0; j < numStreams; j++) totalValueForRowOverlay += latestValidData[j] || 0;
 
                             let rowCurrentXOverlay = 0;
                             p.noStroke();
                             for (let j = 0; j < numStreams; j++) {
                                 const value = latestValidData[j] || 0;
                                 let proportionalWidthOverlay = 0;
+                                if (totalValueForRowOverlay > 0) proportionalWidthOverlay = (value / totalValueForRowOverlay) * p.width;
+                                else proportionalWidthOverlay = p.width / numStreams;
 
-                                if (totalValueForRowOverlay > 0) {
-                                    proportionalWidthOverlay = (value / totalValueForRowOverlay) * p.width;
-                                } else {
-                                    proportionalWidthOverlay = p.width / numStreams;
-                                }
-
-                                // Map value to color and alpha
+                                // Map value to color components (H, S, B)
                                 const hueOverlay = p.map(value, 0, 360, 0, 360);
                                 const saturationOverlay = p.map(value, 0, 360, 40, 90);
                                 const brightnessOverlay = p.map(value, 0, 360, 50, 95);
-                                const alphaOverlay = p.map(value, 0, 360, 0.5, 1.0);
+                                // ** Use the global overlayDrawAlpha set by the slider **
+                                const alphaOverlay = overlayDrawAlpha;
 
                                 if (totalValueForRowOverlay === 0) {
-                                    p.fill(0, 0, 50, 0.7);
+                                    // Apply global alpha to the default fill too
+                                    p.fill(0, 0, 50, alphaOverlay);
                                 } else {
                                     p.fill(hueOverlay, saturationOverlay, brightnessOverlay, alphaOverlay);
                                 }
 
-                                // Draw the latest data row at the current independent Y position
                                 if (proportionalWidthOverlay > 0 && currentDrawY >= 0) {
-                                    p.rect(rowCurrentXOverlay, currentDrawY - overlayWeftHeight, // Draw ending at currentDrawY
+                                    p.rect(rowCurrentXOverlay, currentDrawY - overlayWeftHeight,
                                            proportionalWidthOverlay, overlayWeftHeight);
                                 }
                                 rowCurrentXOverlay += proportionalWidthOverlay;
@@ -1117,16 +1117,19 @@
 
         liveVizSelect.addEventListener('change', (event) => {
             currentLiveVisualization = event.target.value;
-            if (currentLiveVisualization === 'wovenTapestryOverlay') {
-                overlaySpeedControlDiv.style.display = 'flex';
+            // Show/hide the overlay controls based on selection
+            const showOverlayControls = currentLiveVisualization === 'wovenTapestryOverlay';
+            overlaySpeedControlDiv.style.display = showOverlayControls ? 'flex' : 'none';
+            overlayOpacityControlDiv.style.display = showOverlayControls ? 'flex' : 'none'; // Toggle opacity control too
+
+            if (showOverlayControls) {
                 // When switching TO overlay, reset Y pos immediately
                 overlayCurrentY = p5Instance ? p5Instance.height : -1;
-            } else {
-                overlaySpeedControlDiv.style.display = 'none';
             }
-            // Also need to potentially clear background if switching AWAY from overlay/strips
+
+            // Clear background if switching TO a mode that needs it
             if (isCollecting && p5Instance && (currentLiveVisualization === 'particleEmitters' || currentLiveVisualization === 'wovenTapestry' || currentLiveVisualization === 'none')) {
-                p5Instance.background(240); // Clear to default when switching TO viz that redraws background
+                p5Instance.background(240);
             }
         });
 
@@ -1163,12 +1166,20 @@
             overlaySpeedValueSpan.textContent = overlayDrawSpeed.toFixed(1);
         });
 
+        // Add listener for the opacity slider
+        overlayOpacitySlider.addEventListener('input', (event) => {
+            overlayDrawAlpha = parseFloat(event.target.value);
+            overlayOpacityValueSpan.textContent = overlayDrawAlpha.toFixed(2); // Update display
+        });
+
         // Initial Setup
         updateButtonStates();
-        // Hide speed slider initially
+        // Hide overlay controls initially
         overlaySpeedControlDiv.style.display = 'none';
-        // Initialize slider text display
+        overlayOpacityControlDiv.style.display = 'none';
+        // Initialize slider text displays
         overlaySpeedValueSpan.textContent = parseFloat(overlaySpeedSlider.value).toFixed(1);
+        overlayOpacityValueSpan.textContent = parseFloat(overlayOpacitySlider.value).toFixed(2);
         // Set initial state of duration input based on checkbox (in case of page reload)
         collectIndefinitelyCheckbox.dispatchEvent(new Event('change'));
 
