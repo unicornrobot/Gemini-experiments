@@ -58,14 +58,21 @@
                 <input type="number" id="collectDuration" value="10" min="1" class="w-20 border-gray-300 rounded-md shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
             </div>
 
+            <div class="flex items-center gap-1">
+                <input type="checkbox" id="collectIndefinitely" class="rounded border-gray-300 text-indigo-600 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+                <label for="collectIndefinitely" class="text-sm font-medium text-gray-600">Collect Indefinitely</label>
+            </div>
+
             <button id="startButton" class="bg-green-500 hover:bg-green-600 text-white font-semibold rounded-md shadow" disabled>Start Collection</button>
             <button id="stopButton" class="bg-red-500 hover:bg-red-600 text-white font-semibold rounded-md shadow" disabled>Stop Collection</button>
 
             <div class="flex items-center gap-2">
                 <label for="liveVizSelect" class="text-sm font-medium text-gray-600">Live View:</label>
                 <select id="liveVizSelect" class="border-gray-300 rounded-md shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
-                    <option value="centeredStrips" selected>Centered Strips</option>
+                    <option value="centeredStrips">Centered Strips</option>
                     <option value="particleEmitters">Particle Emitters</option>
+                    <option value="wovenTapestry">Woven Tapestry</option>
+                    <option value="wovenTapestryOverlay">Woven Tapestry (Overlay)</option>
                     <option value="none">None</option>
                     <!-- Add more live viz options here later -->
                 </select>
@@ -82,6 +89,15 @@
                     <option value="heatmap">Heatmap</option>
                 </select>
             </div>
+
+            <!-- Add Speed Slider Control -->
+            <div id="overlaySpeedControl" class="flex items-center gap-2" style="display: none;"> <!-- Hidden initially -->
+                 <label for="overlaySpeedSlider" class="text-sm font-medium text-gray-600">Overlay Speed:</label>
+                 <input type="range" id="overlaySpeedSlider" min="0.1" max="5" value="1" step="0.1" class="w-32 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
+                 <span id="overlaySpeedValue" class="text-sm text-gray-500 w-8 text-right">1.0</span>
+            </div>
+            <!-- End Speed Slider Control -->
+
         </div>
 
         <div id="status" class="status-indicator status-disconnected text-center mb-4">Status: Disconnected</div>
@@ -107,6 +123,9 @@
         let expectedDataLength = -1; // To store the number of values per line, determined by first valid data line
         let lastValidProgress = 0;
         let absoluteLatestData = null; // Store the very last parsed data line
+        let collectIndefinitely = false; // Flag for indefinite collection
+        let overlayDrawSpeed = 1.0; // Default drawing speed (pixels per frame)
+        let overlayCurrentY = -1; // Current drawing Y position for overlay (-1 indicates reset needed)
 
         let p5Instance; // To hold the p5 sketch instance
         let currentVisualization = 'lines'; // Default FINAL visualization
@@ -117,12 +136,16 @@
         const startButton = document.getElementById('startButton');
         const stopButton = document.getElementById('stopButton');
         const collectDurationInput = document.getElementById('collectDuration');
+        const collectIndefinitelyCheckbox = document.getElementById('collectIndefinitely');
         const liveVizSelect = document.getElementById('liveVizSelect');
         const vizSelect = document.getElementById('vizSelect');
         const statusDiv = document.getElementById('status');
         const errorDiv = document.getElementById('errorDisplay');
         const dataCountDiv = document.getElementById('dataCount');
         const canvasContainer = document.getElementById('canvasContainer');
+        const overlaySpeedControlDiv = document.getElementById('overlaySpeedControl'); // Add this
+        const overlaySpeedSlider = document.getElementById('overlaySpeedSlider'); // Add this
+        const overlaySpeedValueSpan = document.getElementById('overlaySpeedValue'); // Add this
 
         // --- Utility Functions ---
         function updateStatus(message, type) {
@@ -150,6 +173,7 @@
             startButton.disabled = !isConnected || isCollecting;
             stopButton.disabled = !isCollecting;
             collectDurationInput.disabled = isCollecting;
+            collectIndefinitelyCheckbox.disabled = isCollecting;
         }
 
         // --- Serial Communication ---
@@ -272,9 +296,9 @@
                      absoluteLatestData = values; // Update latest data
                      // Also set expected length here if not set yet, based on any valid line
                      if (isCollecting && expectedDataLength === -1) {
-                         expectedDataLength = values.length;
-                         console.log(`Determined expected data length: ${expectedDataLength}`);
-                     }
+                    expectedDataLength = values.length;
+                    console.log(`Determined expected data length: ${expectedDataLength}`);
+                }
                 } else if (!isValidFormat) {
                     console.warn("Invalid data format received:", line, values);
                      return; // Skip further processing for this line
@@ -297,12 +321,12 @@
                         }
                     } else if (expectedDataLength !== -1) { // Only warn if length is set
                          console.warn(`Data length mismatch. Expected ${expectedDataLength}, got ${values.length}. Line: "${line}"`);
-                    }
+                     }
                 }
                  // else: Data below threshold or not collecting, don't add to collectedData
 
             } catch (parseError) {
-                 console.error("Error parsing line:", line, parseError);
+                console.error("Error parsing line:", line, parseError);
             }
         }
 
@@ -348,39 +372,56 @@
                 showError("Not connected to a serial device.");
                 return;
             }
-            if (isCollecting) return; // Already collecting
+            if (isCollecting) return;
 
             hideError();
             collectedData = [];
             expectedDataLength = -1;
             lastValidProgress = 0;
-            absoluteLatestData = null; // Reset latest data tracker too
+            absoluteLatestData = null;
+            overlayCurrentY = -1; // Reset Y position marker
             updateDataCount();
             isCollecting = true;
             collectionStartTime = Date.now();
-            const durationSeconds = parseInt(collectDurationInput.value, 10);
-            const durationMs = durationSeconds * 1000;
 
-            updateStatus(`Collecting data for ${durationSeconds}s...`, 'collecting');
-            updateButtonStates();
+            let statusMessage = "";
+            if (collectIndefinitely) {
+                statusMessage = "Collecting data indefinitely...";
+                updateStatus(statusMessage, 'collecting');
+                // Do NOT set the timer
+                clearTimeout(collectionTimerId);
+                collectionTimerId = null; // Explicitly clear timer ID
+            } else {
+                const durationSeconds = parseInt(collectDurationInput.value, 10);
+                const durationMs = durationSeconds * 1000;
+                statusMessage = `Collecting data for ${durationSeconds}s...`;
+                updateStatus(statusMessage, 'collecting');
+                // Set the timer only if not indefinite
+                clearTimeout(collectionTimerId);
+                collectionTimerId = setTimeout(stopCollection, durationMs);
+            }
 
-            // Stop collection after the specified duration
-            clearTimeout(collectionTimerId); // Clear any previous timer
-            collectionTimerId = setTimeout(stopCollection, durationMs);
+            updateButtonStates(); // Update buttons after setting isCollecting
 
-            // Prepare p5 canvas and particle system for live drawing
+            // Prepare p5 canvas
             if (p5Instance) {
-                 // Clear particles regardless of visualization type
                  if (p5Instance.sketchInstanceVariables && typeof p5Instance.sketchInstanceVariables.clearParticles === 'function') {
                     p5Instance.sketchInstanceVariables.clearParticles();
                  }
 
                  // Set initial background based on selected live visualization
-                 if (currentLiveVisualization === 'particleEmitters') {
-                    p5Instance.background(0, 0, 10); // Dark background for particles
+                 // Modes that don't clear per frame need an initial clear.
+                 if (currentLiveVisualization === 'centeredStrips' || currentLiveVisualization === 'wovenTapestryOverlay') {
+                     p5Instance.background(240);
+                     if (currentLiveVisualization === 'wovenTapestryOverlay' && p5Instance.height) {
+                         overlayCurrentY = p5Instance.height; // Initialize Y specifically for overlay
+                     }
                  } else {
-                    p5Instance.background(240); // Default light grey for others (like strips)
+                     // For others (particles, standard tapestry, none), the background
+                     // will be handled within their respective draw cases.
+                     p5Instance.background(240); // General initial clear still okay
                  }
+
                  p5Instance.loop(); // Start the p5 draw loop
             }
         }
@@ -727,66 +768,137 @@
                 p.textAlign(p.CENTER, p.CENTER);
                 p.fill(0, 0, 80);
                 p.text('Connect device and collect data to visualize.', p.width / 2, p.height / 2);
+                // Initialize overlay Y after canvas is created
+                overlayCurrentY = p.height;
             };
 
             p.draw = () => {
                  particles = p.sketchInstanceVariables.particles; // Ensure local reference is up-to-date
 
-                 if (isCollecting) {
-                     // --- Live Visualization Logic ---
-                     // Check only if we have at least one *valid* data point stored
-                     if (collectedData.length === 0) {
-                         // If no valid data yet, just wait. Canvas was cleared in startCollection.
-                         return; // Wait for the first valid data point
+                if (isCollecting) {
+                    // --- Live Visualization Logic ---
+                     // Check if we have *any* data collected *at all* yet
+                     // We might draw warp threads even before the first valid point
+                     let latestValidData = null;
+                     if (collectedData.length > 0) {
+                         latestValidData = collectedData[collectedData.length - 1];
                      }
+                     // We also need expectedDataLength to know how many streams to expect
+                     const numStreams = (expectedDataLength > 0) ? expectedDataLength : 1; // Default to 1 if not set
 
-                     // We have at least one valid point, get the latest *valid* one
-                     const latestValidData = collectedData[collectedData.length - 1];
+                     // Get duration for calculations below
+                     const durationSeconds = parseInt(collectDurationInput.value, 10) || 1; // Default to 1s if invalid
 
-                     // Now we know expectedDataLength > 0 because valid data exists
-                     const numStreams = expectedDataLength;
-
-                     // --- Select live visualization based on dropdown ---
-                     switch (currentLiveVisualization) {
-                         case 'centeredStrips':
+                    // --- Select live visualization based on dropdown ---
+                    switch (currentLiveVisualization) {
+                        case 'centeredStrips':
                              // --- Centered Strips Logic ---
+                             // Must have valid data to draw strips
+                             if (!latestValidData || collectedData.length === 0) return;
+
                              // **NO p.background() call here**
+                             const stripBoxHeight = 2;
+                             const stripTopEdgeY = p.height - (collectedData.length * stripBoxHeight);
 
-                             const boxHeight = 2; // Height of each data strip
-
-                             // Calculate Y position based on the COUNT of valid points stored
-                             // The Nth point (where N = collectedData.length) has its top edge at:
-                             const topEdgeY = p.height - (collectedData.length * boxHeight);
-
-                             let totalActualWidth = 0;
-                             let actualBoxWidths = [];
-                             const maxBoxWidthPerStream = p.width / numStreams;
-
-                             // Use the latest VALID data point for drawing width/color
-                             for (let j = 0; j < numStreams; j++) {
-                                 const value = latestValidData[j] || 0; // Use latestValidData
-                                 const boxWidth = p.map(value, 0, 360, 0, maxBoxWidthPerStream);
-                                 actualBoxWidths.push(boxWidth);
-                                 totalActualWidth += boxWidth;
+                             let stripTotalActualWidth = 0;
+                             let stripActualBoxWidths = [];
+                             const stripMaxBoxWidthPerStream = p.width / numStreams;
+                            for (let j = 0; j < numStreams; j++) {
+                                 const value = latestValidData[j] || 0;
+                                 const boxWidth = p.map(value, 0, 360, 0, stripMaxBoxWidthPerStream);
+                                 stripActualBoxWidths.push(boxWidth);
+                                 stripTotalActualWidth += boxWidth;
                              }
-
-                             let startX = (p.width - totalActualWidth) / 2;
-                             let currentX = startX;
-
-                             p.noStroke();
-                             for (let j = 0; j < numStreams; j++) {
-                                 const value = latestValidData[j] || 0; // Use latestValidData again
-                                 const boxWidth = actualBoxWidths[j];
-                                 const hue = p.map(value, 0, 360, 240, 0);
-                                 p.fill(hue, 90, 90);
-                                 if (boxWidth > 0) {
-                                     // Draw the strip for the latest valid data point at the Y
-                                     // position corresponding to its count.
-                                     p.rect(currentX, topEdgeY, boxWidth, boxHeight);
+                             let stripStartX = (p.width - stripTotalActualWidth) / 2;
+                             let stripCurrentX = stripStartX;
+                            p.noStroke();
+                            for (let j = 0; j < numStreams; j++) {
+                                 const value = latestValidData[j] || 0;
+                                 const boxWidth = stripActualBoxWidths[j];
+                                const hue = p.map(value, 0, 360, 240, 0);
+                                p.fill(hue, 90, 90);
+                                if (boxWidth > 0) {
+                                     p.rect(stripCurrentX, stripTopEdgeY, boxWidth, stripBoxHeight);
                                  }
-                                 currentX += boxWidth;
+                                 stripCurrentX += boxWidth;
                              }
                              break; // End of centeredStrips case
+
+                        case 'wovenTapestry':
+                            // --- Woven Tapestry Logic (Full Width, Wrap-Around) ---
+                            p.background(30, 30, 40); // Dark background each frame
+
+                            const warpSpacing = 8;
+                            const warpColor = p.color(0, 0, 40);
+                            const weftHeight = 4; // Fixed height for stable wrapping calculation
+
+                            // 1. Draw Warp Threads
+                            p.stroke(warpColor);
+                            p.strokeWeight(1);
+                            for (let wx = warpSpacing / 2; wx < p.width; wx += warpSpacing) {
+                                p.line(wx, 0, wx, p.height);
+                            }
+
+                            // 2. Draw Weft Rows (wrap around, draw only visible)
+                            p.noStroke();
+                            if (collectedData.length > 0 && weftHeight > 0) {
+                                const maxVisibleRows = Math.floor(p.height / weftHeight);
+                                // Calculate the starting index in collectedData to draw
+                                const startIndex = Math.max(0, collectedData.length - maxVisibleRows);
+
+                                // Loop only through the data points that should be visible
+                                for (let k = startIndex; k < collectedData.length; k++) {
+                                    const dataPoint = collectedData[k];
+                                    if (!dataPoint || dataPoint.length !== numStreams) continue;
+
+                                    // Calculate the index relative to the visible window
+                                    const relativeIndex = k - startIndex;
+                                    // Calculate Y position based on relative index
+                                    const rowY = p.height - (relativeIndex + 1) * weftHeight;
+
+                                    // --- Calculate Proportional Widths ---
+                                    let totalValueForRow = 0;
+                                    for (let j = 0; j < numStreams; j++) {
+                                        totalValueForRow += dataPoint[j] || 0;
+                                    }
+
+                                    let rowCurrentX = 0; // Start from left edge
+
+                                    // Draw segments proportionally across the full width
+                                    for (let j = 0; j < numStreams; j++) {
+                                        const value = dataPoint[j] || 0;
+                                        let proportionalWidth = 0;
+
+                                        if (totalValueForRow > 0) {
+                                            proportionalWidth = (value / totalValueForRow) * p.width;
+                                        } else if (numStreams > 0) {
+                                            proportionalWidth = p.width / numStreams;
+                                        }
+
+                                        // Map value to color and alpha
+                                        const hue = p.map(value, 0, 360, 0, 360);
+                                        const saturation = p.map(value, 0, 360, 40, 90);
+                                        const brightness = p.map(value, 0, 360, 50, 95);
+                                        const alpha = p.map(value, 0, 360, 0.5, 1.0);
+
+                                        if (totalValueForRow === 0) {
+                                            p.fill(0, 0, 50, 0.7);
+                                        } else {
+                                            p.fill(hue, saturation, brightness, alpha);
+                                        }
+
+                                        if (proportionalWidth > 0) {
+                                            // Ensure drawing doesn't go below 0 due to float errors
+                                            if (rowY >= 0) {
+                                                 p.rect(rowCurrentX, rowY, proportionalWidth, weftHeight);
+                                            }
+                                        }
+                                        rowCurrentX += proportionalWidth;
+                                    }
+                                }
+                             } // End if collectedData.length > 0
+                            break; // End of wovenTapestry case
+
 
                          case 'particleEmitters':
                               // --- Particle Emitter Logic ---
@@ -802,9 +914,8 @@
 
                               p.background(0, 0, 10, 0.1); // Trail effect
 
-                              if (!absoluteLatestData || absoluteLatestData.length !== expectedDataLength) {
-                                  // If expected length isn't set or latest data is bad, skip particle frame
-                                  break;
+                              if (!absoluteLatestData || (expectedDataLength > 0 && absoluteLatestData.length !== expectedDataLength)) {
+                                  break; // Check length against expected if known
                               }
 
                               const numEmitterStreams = absoluteLatestData.length;
@@ -820,11 +931,11 @@
                                    const initialSpeed = 2;
                                    const lifespan = 80;
 
-                                   for (let i = 0; i < emissionRate; i++) {
+                                for (let i = 0; i < emissionRate; i++) {
                                        // ... (create particles) ...
                                         let angle = p.random(p.TWO_PI);
-                                        let vx = p.cos(angle) * initialSpeed;
-                                        let vy = p.sin(angle) * initialSpeed;
+                                    let vx = p.cos(angle) * initialSpeed;
+                                    let vy = p.sin(angle) * initialSpeed;
                                         p.sketchInstanceVariables.particles.push(new Particle(emitterX, emitterY, vx, vy, lifespan, col));
                                    }
                               }
@@ -840,19 +951,89 @@
                               }
                               break; // End of particleEmitters case
 
-                         case 'none':
-                             // --- None Logic ---
-                              p.background(240); // Clear background
-                              // Draw progress bar based on overall time progress
-                              const timeProgress = p.constrain((Date.now() - collectionStartTime) / (durationMs || 1), 0, 1);
-                              p.noStroke();
-                              p.fill(0, 0, 80);
-                              p.rect(0, p.height - 5, p.width, 5);
-                              p.fill(120, 80, 80);
-                              p.rect(0, p.height - 5, p.width * timeProgress, 5);
-                              break; // End of none case
+                        case 'wovenTapestryOverlay':
+                            // --- Woven Tapestry (Overlay/Wrap) Logic with Speed Control ---
+                            // **NO p.background() call here**
 
-                         default:
+                            // Check if we have valid data to draw
+                             if (!latestValidData || collectedData.length === 0) return;
+
+                             // Ensure numStreams is valid
+                             if (numStreams <= 0) break;
+
+                            const overlayWeftHeight = 4; // Fixed height for segments
+
+                            // --- Update and Wrap Y Position ---
+                            // Ensure Y is initialized (might not be if startCollection called before setup finished)
+                            if (overlayCurrentY === -1) {
+                                overlayCurrentY = p.height;
+                            }
+                            overlayCurrentY -= overlayDrawSpeed; // Move up based on speed
+                            if (overlayCurrentY < 0) { // Wrap around
+                                overlayCurrentY = p.height;
+                            }
+                            // Round Y to nearest int to potentially align better with pixels? Optional.
+                            const currentDrawY = Math.round(overlayCurrentY);
+
+                            // --- Calculate Proportional Widths for the latest point ---
+                            let totalValueForRowOverlay = 0;
+                            for (let j = 0; j < numStreams; j++) {
+                                totalValueForRowOverlay += latestValidData[j] || 0;
+                            }
+
+                            let rowCurrentXOverlay = 0;
+                            p.noStroke();
+                            for (let j = 0; j < numStreams; j++) {
+                                const value = latestValidData[j] || 0;
+                                let proportionalWidthOverlay = 0;
+
+                                if (totalValueForRowOverlay > 0) {
+                                    proportionalWidthOverlay = (value / totalValueForRowOverlay) * p.width;
+                                } else {
+                                    proportionalWidthOverlay = p.width / numStreams;
+                                }
+
+                                // Map value to color and alpha
+                                const hueOverlay = p.map(value, 0, 360, 0, 360);
+                                const saturationOverlay = p.map(value, 0, 360, 40, 90);
+                                const brightnessOverlay = p.map(value, 0, 360, 50, 95);
+                                const alphaOverlay = p.map(value, 0, 360, 0.5, 1.0);
+
+                                if (totalValueForRowOverlay === 0) {
+                                    p.fill(0, 0, 50, 0.7);
+                                } else {
+                                    p.fill(hueOverlay, saturationOverlay, brightnessOverlay, alphaOverlay);
+                                }
+
+                                // Draw the latest data row at the current independent Y position
+                                if (proportionalWidthOverlay > 0 && currentDrawY >= 0) {
+                                    p.rect(rowCurrentXOverlay, currentDrawY - overlayWeftHeight, // Draw ending at currentDrawY
+                                           proportionalWidthOverlay, overlayWeftHeight);
+                                }
+                                rowCurrentXOverlay += proportionalWidthOverlay;
+                            }
+                            break; // End of wovenTapestryOverlay case
+
+                        case 'none':
+                             p.background(240); // Clear background
+                             p.noStroke();
+                             p.fill(0, 0, 80);
+                             // Only show progress bar if NOT indefinite
+                             if (!collectIndefinitely) {
+                                 const durationMs = parseInt(collectDurationInput.value, 10) * 1000 || 1;
+                                 const timeProgress = p.constrain((Date.now() - collectionStartTime) / durationMs, 0, 1);
+                                 p.rect(0, p.height - 5, p.width, 5); // Background bar
+                                 p.fill(120, 80, 80);
+                                 p.rect(0, p.height - 5, p.width * timeProgress, 5); // Progress
+                             } else {
+                                 // Maybe show a blinking indicator or just nothing for indefinite 'none'
+                                 p.fill(150);
+                                 p.textAlign(p.CENTER, p.BOTTOM);
+                                 p.text("Collecting indefinitely...", p.width / 2, p.height - 10);
+                             }
+                             break; // End of none case
+
+                        default:
                             // ... (default case with background clear) ...
                             p.background(240);
                             p.fill(0);
@@ -861,10 +1042,10 @@
 
                      } // End switch
 
-                 } else if (collectedData.length > 0) {
+                } else if (collectedData.length > 0) {
                      // --- Post-Collection Logic ---
-                     p.background(255); // Clear background for final visualization
-                     if (visualizations[currentVisualization]) {
+                    p.background(255); // Clear background for final visualization
+                    if (visualizations[currentVisualization]) {
                         try {
                             visualizations[currentVisualization](collectedData);
                         } catch(visError) {
@@ -874,19 +1055,19 @@
                              p.textAlign(p.CENTER, p.CENTER);
                              p.text(`Error rendering visualization: ${visError.message}`, p.width/2, p.height/2);
                         }
-                     } else {
+                    } else {
                         p.fill(200, 0, 0); // Indicate error - unknown viz
                         p.noStroke();
                         p.textAlign(p.CENTER, p.CENTER);
                         p.text(`Unknown visualization: ${currentVisualization}`, p.width / 2, p.height / 2);
-                     }
-                 } else {
+                    }
+                } else {
                     // --- Initial State Logic ---
                     p.background(0, 0, 10); // Dark background before connection/collection
                     p.fill(0, 0, 80);
                     p.textAlign(p.CENTER, p.CENTER);
                     p.text('Connect device and collect data to visualize.', p.width / 2, p.height / 2);
-                 }
+                }
             }; // End p.draw
 
              // Custom function to clear canvas, called before starting collection
@@ -936,9 +1117,17 @@
 
         liveVizSelect.addEventListener('change', (event) => {
             currentLiveVisualization = event.target.value;
-            // REMOVED background clearing from here.
-            // The initial background is set ONCE in startCollection.
-            // The p.draw() loop handles background clearing PER FRAME only if needed (e.g., for particles).
+            if (currentLiveVisualization === 'wovenTapestryOverlay') {
+                overlaySpeedControlDiv.style.display = 'flex';
+                // When switching TO overlay, reset Y pos immediately
+                overlayCurrentY = p5Instance ? p5Instance.height : -1;
+            } else {
+                overlaySpeedControlDiv.style.display = 'none';
+            }
+            // Also need to potentially clear background if switching AWAY from overlay/strips
+            if (isCollecting && p5Instance && (currentLiveVisualization === 'particleEmitters' || currentLiveVisualization === 'wovenTapestry' || currentLiveVisualization === 'none')) {
+                p5Instance.background(240); // Clear to default when switching TO viz that redraws background
+            }
         });
 
         vizSelect.addEventListener('change', (event) => {
@@ -957,10 +1146,31 @@
             }
         });
 
-        // Initialize button states on load
+        collectIndefinitelyCheckbox.addEventListener('change', (event) => {
+            collectIndefinitely = event.target.checked;
+            collectDurationInput.disabled = collectIndefinitely; // Disable duration if indefinite
+            // Maybe add visual feedback like greying out the duration input/label
+             if (collectIndefinitely) {
+                 collectDurationInput.parentElement.classList.add('opacity-50');
+             } else {
+                 collectDurationInput.parentElement.classList.remove('opacity-50');
+             }
+        });
+
+        // Add listener for the speed slider
+        overlaySpeedSlider.addEventListener('input', (event) => {
+            overlayDrawSpeed = parseFloat(event.target.value);
+            overlaySpeedValueSpan.textContent = overlayDrawSpeed.toFixed(1);
+        });
+
+        // Initial Setup
         updateButtonStates();
-        // Create p5 instance on load? Or wait for connect? Let's wait for connect.
-        // p5Instance = new p5(sketch);
+        // Hide speed slider initially
+        overlaySpeedControlDiv.style.display = 'none';
+        // Initialize slider text display
+        overlaySpeedValueSpan.textContent = parseFloat(overlaySpeedSlider.value).toFixed(1);
+        // Set initial state of duration input based on checkbox (in case of page reload)
+        collectIndefinitelyCheckbox.dispatchEvent(new Event('change'));
 
     </script>
 
