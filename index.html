@@ -191,20 +191,25 @@
         // --- Serial Communication ---
         async function connectSerial() {
             hideError();
+            // Reset state variables in case of reconnection
+            expectedDataLength = -1;
+            absoluteLatestData = null;
+            lastValidProgress = 0; // Reset progress too
+
             if ('serial' in navigator) {
                 try {
                     updateStatus('Requesting port...', 'collecting');
                     port = await navigator.serial.requestPort();
-                    await port.open({ baudRate: 9600 }); // Common baud rate, adjust if needed
+                    await port.open({ baudRate: 9600 });
 
                     updateStatus('Connected', 'connected');
                     keepReading = true;
-                    readLoop(); // Start the reading loop
+                    readLoop();
                     updateButtonStates();
 
                 } catch (err) {
                     updateStatus('Connection failed', 'error');
-                    showError(`Could not connect: ${err.message}`);
+                    showError(`Could not open port: ${err.message}`); // Adjusted error message slightly
                     port = null;
                     updateButtonStates();
                 }
@@ -294,57 +299,90 @@
 
         function parseAndStoreData(line) {
             const threshold = 20;
+            const padValue = 0;
 
             try {
                 const values = line.split(',')
-                                   .map(val => val.trim()) // Trim whitespace
-                                   .filter(val => val !== '') // Filter out empty strings potentially caused by trailing commas
-                                   .map(Number); // Convert to numbers
+                                   .map(val => val.trim())
+                                   .filter(val => val !== '')
+                                   .map(Number);
 
-                // --- Store the absolute latest valid format data ---
-                // We do this BEFORE threshold check for particle emitters
-                const isValidFormat = values.every(v => !isNaN(v) && v >= 0 && v <= 360);
+                // --- Basic Format/Range Validation ---
+                const isValidFormat = values.every(v => !isNaN(v) && v <= 360); // Allow negatives up to 360
+
                 if (isValidFormat && values.length > 0) {
-                     absoluteLatestData = values; // Update latest data
-                     // Also set expected length here if not set yet, based on any valid line
-                     if (isCollecting && expectedDataLength === -1) {
-                    expectedDataLength = values.length;
-                    console.log(`Determined expected data length: ${expectedDataLength}`);
-                }
-                } else if (!isValidFormat) {
-                    console.warn("Invalid data format received:", line, values);
-                     return; // Skip further processing for this line
-                }
-                // ----------------------------------------------------
+                    // Update absoluteLatestData with the raw parsed values
+                    absoluteLatestData = values;
 
+                    // --- Sensor Control for Overlay Viz ---
+                    if (currentLiveVisualization === 'wovenTapestryOverlay' && values.length >= 12) {
+                        const speedValue = values[10];
+                        const newSpeed = p5Instance.map(speedValue, 0, 360, 0.1, 5.0);
+                        overlayDrawSpeed = p5Instance.constrain(newSpeed, 0.1, 5.0);
 
-                // Check threshold
-                const meetsThreshold = values.some(v => v > threshold);
+                        const opacityValue = values[11];
+                        const newAlpha = p5Instance.map(opacityValue, 0, 360, 0.0, 1.0);
+                        overlayDrawAlpha = p5Instance.constrain(newAlpha, 0.0, 1.0);
 
-                // Store in collectedData only if collecting, meets threshold, and matches length
-                if (isCollecting && meetsThreshold) {
-                    if (values.length === expectedDataLength) {
-                        collectedData.push(values);
-                        updateDataCount();
-                        const durationMs = parseInt(collectDurationInput.value, 10) * 1000;
-                        if (durationMs > 0) {
-                             lastValidProgress = (Date.now() - collectionStartTime) / durationMs;
-                             lastValidProgress = Math.min(lastValidProgress, 1);
+                        if (overlaySpeedSlider && overlaySpeedValueSpan) {
+                            overlaySpeedSlider.value = overlayDrawSpeed;
+                            overlaySpeedValueSpan.textContent = overlayDrawSpeed.toFixed(1);
                         }
-                    } else if (expectedDataLength !== -1) { // Only warn if length is set
-                         console.warn(`Data length mismatch. Expected ${expectedDataLength}, got ${values.length}. Line: "${line}"`);
+                        if (overlayOpacitySlider && overlayOpacityValueSpan) {
+                             overlayOpacitySlider.value = overlayDrawAlpha;
+                             overlayOpacityValueSpan.textContent = overlayDrawAlpha.toFixed(2);
+                        }
+                    }
+                    // ------------------------------------
+
+                    // Set expected length based on first valid line during collection
+                     if (isCollecting && expectedDataLength === -1) {
+                         expectedDataLength = values.length;
+                         console.log(`Determined expected data length for this collection: ${expectedDataLength}`);
                      }
+                } else {
+                    console.warn("Invalid data format/range received:", line, values);
+                    return;
                 }
-                 // else: Data below threshold or not collecting, don't add to collectedData
+                // ---------------------------------------
+
+
+                // --- Threshold Check & Data Storage Logic ---
+                if (isCollecting) {
+                    const meetsThreshold = values.some(v => v > threshold);
+                    if (meetsThreshold) {
+                        if (expectedDataLength === -1) {
+                             expectedDataLength = values.length;
+                             console.log(`Fallback: Determined expected data length for this collection: ${expectedDataLength}`);
+                         }
+
+                        let adjustedValues = [];
+                         if (values.length === expectedDataLength) adjustedValues = values;
+                         else if (values.length < expectedDataLength) { /* Pad */ adjustedValues = [...values]; while (adjustedValues.length < expectedDataLength) adjustedValues.push(padValue); console.warn(`Data line shorter. Padded. Line: "${line}"`); }
+                         else { /* Truncate */ adjustedValues = values.slice(0, expectedDataLength); console.warn(`Data line longer. Truncated. Line: "${line}"`); }
+
+                        collectedData.push(adjustedValues);
+                        updateDataCount();
+
+                        // *** Define durationMs HERE ***
+                        const durationMs = parseInt(collectDurationInput.value, 10) * 1000;
+
+                        // Update progress based on time (only if not indefinite)
+                        if (durationMs > 0 && !collectIndefinitely) {
+                            lastValidProgress = Math.min((Date.now() - collectionStartTime) / durationMs, 1);
+                        }
+                    }
+                }
+                // -------------------------------------------
 
             } catch (parseError) {
-                console.error("Error parsing line:", line, parseError);
+                 console.error("Error parsing line:", line, parseError);
             }
         }
 
 
         async function disconnectSerial() {
-            keepReading = false; // Signal the read loop to stop
+            keepReading = false;
 
             if (reader) {
                 try {
@@ -373,6 +411,10 @@
             }
 
             port = null;
+            // Reset state variables on disconnect
+            expectedDataLength = -1;
+            absoluteLatestData = null;
+            lastValidProgress = 0;
             updateStatus('Disconnected', 'disconnected');
             updateButtonStates();
         }
@@ -388,9 +430,10 @@
 
             hideError();
             collectedData = [];
+            // Reset expected length for this specific collection run
             expectedDataLength = -1;
             lastValidProgress = 0;
-            absoluteLatestData = null;
+            absoluteLatestData = null; // Clear latest data from previous run
             overlayCurrentY = -1; // Reset Y position marker
             updateDataCount();
             isCollecting = true;
