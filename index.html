@@ -382,41 +382,43 @@
 
 
         async function disconnectSerial() {
-            keepReading = false;
-
-            if (reader) {
-                try {
-                    await reader.cancel(); // Cancel any pending reads
-                    // The releaseLock should happen in the readLoop's finally block
-                } catch (err) {
-                    console.error('Error cancelling reader:', err);
-                    showError(`Error cancelling reader: ${err.message}`);
-                }
-                reader = null;
-            }
-
-            if (port && port.readable) {
-                 // The read loop should release the lock. Wait a moment just in case.
-                await new Promise(resolve => setTimeout(resolve, 100));
-                try {
-                    await port.close();
-                    console.log("Serial port closed.");
-                } catch (err) {
-                    console.error('Error closing port:', err);
-                     // Ignore errors if the port is already closed or closing.
-                    if (!err.message.includes("port is already closed")) {
-                       showError(`Error closing port: ${err.message}`);
+            try {
+                if (port) {
+                    // First, cancel any ongoing read operations
+                    if (reader) {
+                        await reader.cancel();
+                        await reader.releaseLock();
+                        reader = null;
                     }
+                    
+                    // Close the port
+                    await port.close();
+                    port = null;
+                    
+                    // Reset state variables
+                    expectedDataLength = -1;
+                    absoluteLatestData = [];
+                    
+                    // Update UI
+                    connectButton.textContent = 'Connect Serial';
+                    statusDiv.textContent = 'Disconnected';
+                    statusDiv.style.color = '#666';
+                    
+                    console.log('Serial port closed successfully');
                 }
+            } catch (error) {
+                console.warn('Error during disconnect:', error);
+                // Force reset of state even if there was an error
+                port = null;
+                reader = null;
+                expectedDataLength = -1;
+                absoluteLatestData = [];
+                
+                // Update UI to reflect disconnected state
+                connectButton.textContent = 'Connect Serial';
+                statusDiv.textContent = 'Disconnected (with error)';
+                statusDiv.style.color = '#666';
             }
-
-            port = null;
-            // Reset state variables on disconnect
-            expectedDataLength = -1;
-            absoluteLatestData = null;
-            lastValidProgress = 0;
-            updateStatus('Disconnected', 'disconnected');
-            updateButtonStates();
         }
 
 
@@ -575,7 +577,6 @@
                     p.text('0', 5, p.height - 20);
                     p.text('360', 5, 20);
                 },
-
                 circles: (data) => {
                     p.noStroke();
                     if (data.length === 0 || data[0].length === 0) return;
