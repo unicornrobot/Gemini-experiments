@@ -106,6 +106,14 @@
             </div>
             <!-- End Opacity Slider Control -->
 
+            <!-- Add Weft Height Slider Control -->
+            <div id="overlayWeftHeightControl" class="flex items-center gap-2" style="display: none;"> <!-- Hidden initially -->
+                 <label for="overlayWeftHeightSlider" class="text-sm font-medium text-gray-600">Weft Height:</label>
+                 <input type="range" id="overlayWeftHeightSlider" min="1" max="10" value="4" step="1" class="w-32 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
+                 <span id="overlayWeftHeightValue" class="text-sm text-gray-500 w-8 text-right">4</span>
+            </div>
+            <!-- End Weft Height Slider Control -->
+
         </div>
 
         <div id="status" class="status-indicator status-disconnected text-center mb-4">Status: Disconnected</div>
@@ -134,6 +142,7 @@
         let collectIndefinitely = false; // Flag for indefinite collection
         let overlayDrawSpeed = 1.0; // Default drawing speed (pixels per frame)
         let overlayDrawAlpha = 0.7; // Default drawing alpha (0.0 to 1.0)
+        let overlayWeftHeight = 4; // Default height of weft rows (pixels) - NEW
         let overlayCurrentY = -1; // Current drawing Y position for overlay (-1 indicates reset needed)
 
         let p5Instance; // To hold the p5 sketch instance
@@ -158,6 +167,9 @@
         const overlayOpacityControlDiv = document.getElementById('overlayOpacityControl');
         const overlayOpacitySlider = document.getElementById('overlayOpacitySlider');
         const overlayOpacityValueSpan = document.getElementById('overlayOpacityValue');
+        const overlayWeftHeightControlDiv = document.getElementById('overlayWeftHeightControl');
+        const overlayWeftHeightSlider = document.getElementById('overlayWeftHeightSlider');
+        const overlayWeftHeightValueSpan = document.getElementById('overlayWeftHeightValue');
 
         // --- Utility Functions ---
         function updateStatus(message, type) {
@@ -351,15 +363,24 @@
                     absoluteLatestData = values;
 
                     // --- Sensor Control for Overlay Viz ---
-                    if (currentLiveVisualization === 'wovenTapestryOverlay' && values.length >= 12) {
-                        const speedValue = values[10];
+                    if (currentLiveVisualization === 'wovenTapestryOverlay' && values.length >= 13) {
+                        // Speed (using index 10 -> values[10]) - CORRECT
+                        const speedValue = values[10]; 
                         const newSpeed = p5Instance.map(speedValue, 0, 360, 0.1, 5.0);
                         overlayDrawSpeed = p5Instance.constrain(newSpeed, 0.1, 5.0);
 
+                        // Opacity (using index 11 -> values[11]) - CORRECT
                         const opacityValue = values[11];
                         const newAlpha = p5Instance.map(opacityValue, 0, 360, 0.0, 1.0);
                         overlayDrawAlpha = p5Instance.constrain(newAlpha, 0.0, 1.0);
 
+                        // Weft Height (using index 12 -> values[12]) - CORRECT
+                        const weftHeightValue = values[12]; 
+                        const newWeftHeight = p5Instance.map(weftHeightValue, 0, 360, 1, 10); // Map to 1-10 range
+                        // Use constrain and round to integer for height
+                        overlayWeftHeight = Math.round(p5Instance.constrain(newWeftHeight, 1, 10)); 
+
+                        // Update UI Sliders based on sensor values
                         if (overlaySpeedSlider && overlaySpeedValueSpan) {
                             overlaySpeedSlider.value = overlayDrawSpeed;
                             overlaySpeedValueSpan.textContent = overlayDrawSpeed.toFixed(1);
@@ -367,6 +388,11 @@
                         if (overlayOpacitySlider && overlayOpacityValueSpan) {
                              overlayOpacitySlider.value = overlayDrawAlpha;
                              overlayOpacityValueSpan.textContent = overlayDrawAlpha.toFixed(2);
+                        }
+                        // Update new Weft Height slider based on sensor value - NEW
+                        if (overlayWeftHeightSlider && overlayWeftHeightValueSpan) {
+                             overlayWeftHeightSlider.value = overlayWeftHeight;
+                             overlayWeftHeightValueSpan.textContent = overlayWeftHeight;
                         }
                     }
                     // ------------------------------------
@@ -1077,8 +1103,7 @@
                              } // End if collectedData.length > 0
                             break; // End of wovenTapestry case
 
-
-                         case 'particleEmitters':
+                        case 'particleEmitters':
                               // --- Particle Emitter Logic ---
                               // This logic still runs every frame based on the *absolute latest* data
                               // received (via parseAndStoreData triggering redraw indirectly),
@@ -1130,17 +1155,20 @@
                               break; // End of particleEmitters case
 
                         case 'wovenTapestryOverlay':
-                            // --- Woven Tapestry (Overlay/Wrap) Logic with Speed & Opacity Control ---
+                            // --- Woven Tapestry (Overlay/Wrap) Logic ---
                             // **NO p.background() call here**
                             if (!latestValidData || collectedData.length === 0) return;
                             if (numStreams <= 0) break;
 
-                            const overlayWeftHeight = 4;
-                            if (overlayWeftHeight <= 0) break;
-                            const maxVisibleRows = Math.floor(p.height / overlayWeftHeight);
+                            // Use the GLOBAL overlayWeftHeight variable set by parseAndStoreData
+                            if (overlayWeftHeight <= 0) break; // Check the global variable
+                            
+                            // Calculation now uses the global variable
+                            const maxVisibleRows = Math.floor(p.height / overlayWeftHeight); 
                             if (maxVisibleRows <= 0) break;
 
                             // --- Update and Wrap Y Position ---
+                            // Uses global overlayDrawSpeed
                             if (overlayCurrentY === -1) overlayCurrentY = p.height;
                             overlayCurrentY -= overlayDrawSpeed;
                             if (overlayCurrentY < 0) overlayCurrentY = p.height;
@@ -1160,19 +1188,21 @@
 
                                 // Map value to color components (H, S, B)
                                 const hueOverlay = p.map(value, 0, 360, 0, 360);
-                                const saturationOverlay = p.map(value, 0, 360, 40, 90);
+                                // ** Use the reverted overlayDrawSaturation (or a fixed value if you prefer) **
+                                // Let's use a fixed saturation for now unless you want to map it too
+                                const saturationOverlay = 85; // Fixed saturation
                                 const brightnessOverlay = p.map(value, 0, 360, 50, 95);
-                                // ** Use the global overlayDrawAlpha set by the slider **
+                                // Use the global overlayDrawAlpha 
                                 const alphaOverlay = overlayDrawAlpha;
 
                                 if (totalValueForRowOverlay === 0) {
-                                    // Apply global alpha to the default fill too
                                     p.fill(0, 0, 50, alphaOverlay);
                                 } else {
                                     p.fill(hueOverlay, saturationOverlay, brightnessOverlay, alphaOverlay);
                                 }
 
                                 if (proportionalWidthOverlay > 0 && currentDrawY >= 0) {
+                                    // Draw rectangle using the GLOBAL overlayWeftHeight
                                     p.rect(rowCurrentXOverlay, currentDrawY - overlayWeftHeight,
                                            proportionalWidthOverlay, overlayWeftHeight);
                                 }
@@ -1288,11 +1318,19 @@
             // Show/hide the overlay controls based on selection
             const showOverlayControls = currentLiveVisualization === 'wovenTapestryOverlay';
             overlaySpeedControlDiv.style.display = showOverlayControls ? 'flex' : 'none';
-            overlayOpacityControlDiv.style.display = showOverlayControls ? 'flex' : 'none'; // Toggle opacity control too
+            overlayOpacityControlDiv.style.display = showOverlayControls ? 'flex' : 'none';
+            overlayWeftHeightControlDiv.style.display = showOverlayControls ? 'flex' : 'none';
 
             if (showOverlayControls) {
                 // When switching TO overlay, reset Y pos immediately
                 overlayCurrentY = p5Instance ? p5Instance.height : -1;
+                 // Also reset slider positions to match current values
+                 overlaySpeedSlider.value = overlayDrawSpeed;
+                 overlaySpeedValueSpan.textContent = overlayDrawSpeed.toFixed(1);
+                 overlayOpacitySlider.value = overlayDrawAlpha;
+                 overlayOpacityValueSpan.textContent = overlayDrawAlpha.toFixed(2);
+                 overlayWeftHeightSlider.value = overlayWeftHeight;
+                 overlayWeftHeightValueSpan.textContent = overlayWeftHeight;
             }
 
             // Clear background if switching TO a mode that needs it
@@ -1340,14 +1378,22 @@
             overlayOpacityValueSpan.textContent = overlayDrawAlpha.toFixed(2); // Update display
         });
 
+        // Add listener for the weft height slider
+        overlayWeftHeightSlider.addEventListener('input', (event) => {
+            overlayWeftHeight = parseInt(event.target.value, 10); // Use parseInt for integer height
+            overlayWeftHeightValueSpan.textContent = overlayWeftHeight; // Update display
+        });
+
         // Initial Setup
         updateButtonStates();
         // Hide overlay controls initially
         overlaySpeedControlDiv.style.display = 'none';
         overlayOpacityControlDiv.style.display = 'none';
+        overlayWeftHeightControlDiv.style.display = 'none'; // Hide initially
         // Initialize slider text displays
         overlaySpeedValueSpan.textContent = parseFloat(overlaySpeedSlider.value).toFixed(1);
         overlayOpacityValueSpan.textContent = parseFloat(overlayOpacitySlider.value).toFixed(2);
+        overlayWeftHeightValueSpan.textContent = parseInt(overlayWeftHeightSlider.value, 10); // Initialize weft height display
         // Set initial state of duration input based on checkbox (in case of page reload)
         collectIndefinitelyCheckbox.dispatchEvent(new Event('change'));
 
