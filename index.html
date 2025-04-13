@@ -90,29 +90,32 @@
                 </select>
             </div>
 
-            <!-- Add Speed Slider Control -->
-            <div id="overlaySpeedControl" class="flex items-center gap-2" style="display: none;"> <!-- Hidden initially -->
-                 <label for="overlaySpeedSlider" class="text-sm font-medium text-gray-600">Overlay Speed:</label>
-                 <input type="range" id="overlaySpeedSlider" min="0.1" max="5" value="1" step="0.1" class="w-32 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
-                 <span id="overlaySpeedValue" class="text-sm text-gray-500 w-8 text-right">1.0</span>
-            </div>
-            <!-- End Speed Slider Control -->
+            <!-- NEW Single Container for Overlay Sliders -->
+            <div id="overlayControlsContainer" class="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 p-2 border border-gray-200 rounded-md" style="display: none;"> <!-- Hidden initially, uses flex for layout -->
 
-            <!-- Add Opacity Slider Control -->
-            <div id="overlayOpacityControl" class="flex items-center gap-2" style="display: none;"> <!-- Hidden initially -->
-                 <label for="overlayOpacitySlider" class="text-sm font-medium text-gray-600">Overlay Opacity:</label>
-                 <input type="range" id="overlayOpacitySlider" min="0.05" max="1" value="0.7" step="0.05" class="w-32 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
-                 <span id="overlayOpacityValue" class="text-sm text-gray-500 w-8 text-right">0.7</span>
-            </div>
-            <!-- End Opacity Slider Control -->
+                <!-- Weft Height Control Group -->
+                <div class="flex items-center gap-2">
+                    <label for="overlayWeftHeightSlider" class="text-sm font-medium text-gray-600">Height:</label>
+                    <input type="range" id="overlayWeftHeightSlider" min="1" max="10" value="4" step="1" class="w-24 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
+                    <span id="overlayWeftHeightValue" class="text-sm text-gray-500 w-6 text-right">4</span>
+                </div>
 
-            <!-- Add Weft Height Slider Control -->
-            <div id="overlayWeftHeightControl" class="flex items-center gap-2" style="display: none;"> <!-- Hidden initially -->
-                 <label for="overlayWeftHeightSlider" class="text-sm font-medium text-gray-600">Weft Height:</label>
-                 <input type="range" id="overlayWeftHeightSlider" min="1" max="10" value="4" step="1" class="w-32 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
-                 <span id="overlayWeftHeightValue" class="text-sm text-gray-500 w-8 text-right">4</span>
+                <!-- Opacity Control Group -->
+                <div class="flex items-center gap-2">
+                    <label for="overlayOpacitySlider" class="text-sm font-medium text-gray-600">Opacity:</label>
+                    <input type="range" id="overlayOpacitySlider" min="0.05" max="1" value="0.7" step="0.05" class="w-24 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
+                    <span id="overlayOpacityValue" class="text-sm text-gray-500 w-8 text-right">0.7</span>
+                </div>
+
+                <!-- Speed Control Group -->
+                <div class="flex items-center gap-2">
+                    <label for="overlaySpeedSlider" class="text-sm font-medium text-gray-600">Speed:</label>
+                    <input type="range" id="overlaySpeedSlider" min="0.1" max="5" value="1" step="0.1" class="w-24 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
+                    <span id="overlaySpeedValue" class="text-sm text-gray-500 w-8 text-right">1.0</span>
+                </div>
+
             </div>
-            <!-- End Weft Height Slider Control -->
+            <!-- End Single Container -->
 
             <!-- Add Debug Mode Toggle -->
             <div class="flex items-center gap-1">
@@ -169,16 +172,17 @@
         const errorDiv = document.getElementById('errorDisplay');
         const dataCountDiv = document.getElementById('dataCount');
         const canvasContainer = document.getElementById('canvasContainer');
-        const overlaySpeedControlDiv = document.getElementById('overlaySpeedControl');
+        const overlayControlsContainer = document.getElementById('overlayControlsContainer');
+        const debugModeCheckbox = document.getElementById('debugModeCheckbox'); // NEW Reference
+
+        // Add missing references for Speed slider
         const overlaySpeedSlider = document.getElementById('overlaySpeedSlider');
         const overlaySpeedValueSpan = document.getElementById('overlaySpeedValue');
-        const overlayOpacityControlDiv = document.getElementById('overlayOpacityControl');
+        // Existing references below
         const overlayOpacitySlider = document.getElementById('overlayOpacitySlider');
         const overlayOpacityValueSpan = document.getElementById('overlayOpacityValue');
-        const overlayWeftHeightControlDiv = document.getElementById('overlayWeftHeightControl');
         const overlayWeftHeightSlider = document.getElementById('overlayWeftHeightSlider');
         const overlayWeftHeightValueSpan = document.getElementById('overlayWeftHeightValue');
-        const debugModeCheckbox = document.getElementById('debugModeCheckbox'); // NEW Reference
 
         // --- Utility Functions ---
         function updateStatus(message, type) {
@@ -284,11 +288,11 @@
                  overlayWeftHeightValueSpan.textContent = parseInt(overlayWeftHeightSlider.value, 10);
             }
 
-            // Update visibility of overlay controls
+            // Update visibility of the *single* overlay controls container
             const showOverlayControls = liveVizSelect.value === 'wovenTapestryOverlay';
-            if (overlaySpeedControlDiv) overlaySpeedControlDiv.style.display = showOverlayControls ? 'flex' : 'none';
-            if (overlayOpacityControlDiv) overlayOpacityControlDiv.style.display = showOverlayControls ? 'flex' : 'none';
-            if (overlayWeftHeightControlDiv) overlayWeftHeightControlDiv.style.display = showOverlayControls ? 'flex' : 'none';
+            if (overlayControlsContainer) { // Check if the container exists
+                overlayControlsContainer.style.display = showOverlayControls ? 'flex' : 'none'; // Use flex when showing
+            }
 
             // Update duration input disabled state and appearance
              if (collectIndefinitelyCheckbox && collectDurationInput) {
@@ -1438,13 +1442,11 @@
         liveVizSelect.addEventListener('change', (event) => {
             currentLiveVisualization = event.target.value;
 
-            // Update visibility and reset Y pos if needed
-            updateUIDependentElements(); // Handles showing/hiding controls
+            // Update visibility using the centralized function
+            updateUIDependentElements(); // This now handles the single container
+
             if (currentLiveVisualization === 'wovenTapestryOverlay') {
                  overlayCurrentY = p5Instance ? p5Instance.height : -1;
-                 // We don't need to reset slider values here anymore,
-                 // as loadSettings handles the initial state, and manual changes
-                 // are handled by their own listeners.
             }
 
             // Clear background if switching TO a mode that needs it
