@@ -79,15 +79,16 @@
                 </select>
             </div>
 
-            <div class="flex items-center gap-2">
-                <label for="vizSelect" class="text-sm font-medium text-gray-600">Final Visualization:</label>
-                <select id="vizSelect" class="border-gray-300 rounded-md shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+            <div class="flex flex-col items-center">
+                <label for="vizSelect" class="text-sm font-medium text-gray-600 mb-1">Final Viz:</label>
+                <select id="vizSelect" class="w-full p-1.5 border rounded-md text-sm focus:ring-indigo-500 focus:border-indigo-500">
                     <option value="lines">Line Graph</option>
-                    <option value="circles">Circular Plot</option>
-                    <option value="radial">Radial Bars</option>
+                    <option value="circularPlot">Circular Plot</option>
+                    <option value="radialBars">Radial Bars</option>
                     <option value="stackedBars">Stacked Bars</option>
-                    <option value="histogram">Histogram (Stream 1)</option>
+                    <option value="histogram">Histogram</option>
                     <option value="heatmap">Heatmap</option>
+                    <option value="concentricArcs">Concentric Arcs</option> <!-- Add this line -->
                 </select>
             </div>
 
@@ -245,7 +246,7 @@
                     collectDurationInput.value = settings.collectDuration || '10';
                     collectIndefinitelyCheckbox.checked = settings.collectIndefinitely || false;
                     liveVizSelect.value = settings.liveViz || 'centeredStrips';
-                    vizSelect.value = settings.finalViz || 'lines';
+                    vizSelect.value = settings.finalViz || 'lines'; // Keep 'lines' as default or change if desired
                     overlaySpeedSlider.value = settings.overlaySpeed || '1.0';
                     // Load and clamp opacity
                     let loadedOpacity = parseFloat(settings.overlayOpacity || '0.7');
@@ -1062,8 +1063,75 @@
                      p.textAlign(p.CENTER, p.BOTTOM);
                      p.textSize(12);
                      p.text(`Heatmap: ${numStreams} streams over ${numTimeSteps} time steps`, p.width / 2, p.height - 5);
-                }
-            };
+                },
+                concentricArcs: (data) => {
+                    p.background(0, 0, 10); // Dark background
+                    if (data.length === 0 || data[0].length === 0) return;
+
+                    const numTimeSteps = data.length;
+                    const numStreams = data[0].length;
+                    const centerX = p.width / 2;
+                    const centerY = p.height / 2;
+
+                    const padding = 30; // Space from canvas edge
+                    const maxRadius = (p.min(p.width, p.height) / 2) - padding;
+                    // Space the rings based on the number of sensors
+                    const ringSpacing = numStreams > 1 ? maxRadius / (numStreams -1) : maxRadius; 
+                    const innerRadius = numStreams > 1 ? 0 : maxRadius / 2; // Small inner radius if multiple streams
+
+                    // Calculate the angle step for each time point along the circumference
+                    const angleStep = p.TWO_PI / numTimeSteps;
+                    // Define a small gap angle between segments (optional, set to 0 for no gap)
+                    const angleGap = p.radians(0.5); // Small gap in radians
+
+                    p.noFill();
+                    // Determine stroke weight based on ring density
+                    const baseStrokeWeight = p.max(1, ringSpacing * 0.5); // Adjust multiplier (0.5) as needed
+                    p.strokeWeight(baseStrokeWeight);
+
+                    // Iterate through sensor streams (rings)
+                    for (let j = 0; j < numStreams; j++) {
+                        // Calculate the radius for the current sensor's ring
+                        const radius = innerRadius + j * ringSpacing;
+                        const diameter = radius * 2;
+
+                        // Iterate through time steps (arc segments)
+                        for (let i = 0; i < numTimeSteps; i++) {
+                            const value = data[i][j] || 0;
+
+                            // --- Condition to draw the arc: value > 0 ---
+                            // (Could be adjusted to a different threshold)
+                            if (value > 0) {
+                                // Map value (0-360) to hue
+                                const hue = p.map(value, 0, 360, 0, 360);
+                                // Use high saturation/brightness for visibility
+                                p.stroke(hue, 90, 95);
+
+                                // Calculate start and end angles for the arc segment
+                                // Subtract HALF_PI to start drawing from the top
+                                const startAngle = (i * angleStep) - p.HALF_PI + (angleGap / 2);
+                                // Ensure end angle doesn't overlap start due to gap
+                                const endAngle = ((i + 1) * angleStep) - p.HALF_PI - (angleGap / 2);
+
+                                // Draw the arc only if endAngle > startAngle (handles the gap)
+                                if (endAngle > startAngle) {
+                                    p.arc(centerX, centerY, diameter, diameter, startAngle, endAngle);
+                                }
+                            }
+                            // --- If value <= 0, do nothing, leaving a gap ---
+                        }
+                    }
+                     // Optional: Add a center marker or labels if needed
+                     p.fill(0, 0, 80); // White-ish
+                     p.noStroke();
+                     p.ellipse(centerX, centerY, 5, 5);
+                     // Add text label
+                     p.textAlign(p.CENTER, p.BOTTOM);
+                     p.textSize(12);
+                     p.text(`Concentric Arcs: ${numStreams} sensors over ${numTimeSteps} time steps`, p.width/2, p.height - 5);
+
+                }, // End concentricArcs
+            }; // End visualizations object
 
             p.setup = () => {
                 canvasWidth = canvasContainer.offsetWidth > 100 ? canvasContainer.offsetWidth : 600;
