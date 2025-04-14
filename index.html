@@ -47,8 +47,9 @@
 </head>
 <body class="bg-gray-100 p-5">
 
-    <div class="container mx-auto max-w-4xl bg-white p-6 rounded-lg shadow-md">
-        <h1 class="text-2xl font-bold mb-4 text-center text-gray-700">Serial Data Visualizer</h1>
+    <!-- Add id="mainContentContainer" here -->
+    <div id="mainContentContainer" class="container mx-auto max-w-4xl bg-white p-6 rounded-lg shadow-md">
+        <h1 id="mainTitle" class="text-2xl font-bold mb-4 text-center text-gray-700">Serial Data Visualizer</h1>
 
         <div class="controls flex flex-wrap justify-center items-center gap-4 mb-4 p-4 bg-gray-50 rounded-md">
             <button id="connectButton" class="bg-blue-500 hover:bg-blue-600 text-white font-semibold rounded-md shadow">Connect to Serial Device</button>
@@ -155,6 +156,7 @@
         let overlayWeftHeight = 4; // Default height of weft rows (pixels) - NEW
         let overlayCurrentY = -1; // Current drawing Y position for overlay (-1 indicates reset needed)
         let isDebugMode = false; // Flag for debug mode state - NEW
+        let originalCanvasHeight = 400; // Store the original height - NEW
 
         let p5Instance; // To hold the p5 sketch instance
         let currentVisualization = 'lines'; // Default FINAL visualization
@@ -1064,10 +1066,11 @@
             };
 
             p.setup = () => {
-                // Dynamically determine canvas size based on container?
-                // For now, fixed size.
-                canvasWidth = canvasContainer.offsetWidth > 100 ? canvasContainer.offsetWidth : 600; // Ensure minimum width
+                canvasWidth = canvasContainer.offsetWidth > 100 ? canvasContainer.offsetWidth : 600;
+                // Calculate initial height (adjust logic if needed)
                 canvasHeight = 400;
+                originalCanvasHeight = canvasHeight; // Store the initial height
+
                 let cnv = p.createCanvas(canvasWidth, canvasHeight);
                 cnv.parent('canvasContainer'); // Attach canvas to the div
                 p.colorMode(p.HSB, 360, 100, 100, 1.0); // Use HSB for easier color manipulation
@@ -1425,11 +1428,24 @@
 
             // Optional: Handle window resize
             p.windowResized = () => {
-                 canvasWidth = canvasContainer.offsetWidth > 100 ? canvasContainer.offsetWidth : 600;
-                 p.resizeCanvas(canvasWidth, canvasHeight); // Adjust height if needed too
-                 // Don't redraw if collecting, let the loop handle it
+                 // Check if we are in fullscreen targeting the canvas element
+                 if (document.fullscreenElement === p.canvas) {
+                     // Resize to full window dimensions
+                     p.resizeCanvas(p.windowWidth, p.windowHeight);
+                     console.log(`Resized canvas to fullscreen: ${p.windowWidth}x${p.windowHeight}`);
+                 } else {
+                     // Not fullscreen, resize based on container width and original height
+                     canvasWidth = canvasContainer.offsetWidth > 100 ? canvasContainer.offsetWidth : 600;
+                     p.resizeCanvas(canvasWidth, originalCanvasHeight); // Use original height
+                     console.log(`Resized canvas to original: ${canvasWidth}x${originalCanvasHeight}`);
+                 }
+                 // Don't redraw if collecting, let the loop handle it, otherwise redraw
+                 // (Redrawing is now also triggered by handleFullscreenChange)
                  if (!isCollecting) {
-                    p.redraw();
+                    // p.redraw(); // Might be redundant now, handleFullscreenChange calls it
+                 } else {
+                    // Ensure loop is running if collecting, as resize might pause it
+                    p.loop();
                  }
             };
         };
@@ -1528,19 +1544,112 @@
             saveSettings();
         });
 
+        // --- Fullscreen Change Listener ---
+        function handleFullscreenChange() {
+            const mainContainer = document.getElementById('mainContentContainer'); // Get main container
+            const canvasContainer = document.getElementById('canvasContainer'); // Get canvas container
+            const titleElement = document.getElementById('mainTitle');
+            const controlsDiv = document.querySelector('.controls');
+            const statusInfoDivs = [statusDiv, errorDiv, dataCountDiv];
+
+            if (document.fullscreenElement === p5Instance?.canvas) {
+                // --- Entering Fullscreen ---
+                console.log("Entering fullscreen for canvas");
+
+                // --- Hide specific UI elements ---
+                if (titleElement) titleElement.style.display = 'none';
+                if (controlsDiv) controlsDiv.style.display = 'none';
+                statusInfoDivs.forEach(div => { if (div) div.style.display = 'none'; });
+
+                // --- Make the main container transparent and remove padding/shadow ---
+                if (mainContainer) {
+                    mainContainer.style.backgroundColor = 'transparent';
+                    mainContainer.style.padding = '0';
+                    mainContainer.style.boxShadow = 'none';
+                    mainContainer.style.borderRadius = '0';
+                }
+                // --- Remove border/shadow from canvas container ---
+                if (canvasContainer) {
+                    canvasContainer.style.border = 'none';
+                    canvasContainer.style.boxShadow = 'none';
+                    canvasContainer.style.borderRadius = '0';
+                }
+                 // --- Adjust body styles ---
+                document.body.style.padding = '0';
+                document.body.style.backgroundColor = '#000'; // Match p5 bg clear
+
+                // Trigger windowResized in p5 to adapt canvas size immediately
+                if (p5Instance) {
+                     p5Instance.windowResized(); // Resize canvas first
+                     p5Instance.background(0, 0, 10); // Clear to dark background
+                     if (isCollecting) {
+                         p5Instance.loop();
+                     } else {
+                         p5Instance.redraw();
+                     }
+                }
+
+            } else {
+                // --- Exiting Fullscreen ---
+                console.log("Exiting fullscreen");
+
+                // --- Restore specific UI element visibility ---
+                if (titleElement) titleElement.style.display = 'block';
+                if (controlsDiv) controlsDiv.style.display = 'flex';
+                statusInfoDivs.forEach(div => {
+                    if (div && div.id !== 'errorDisplay') {
+                       div.style.display = 'block';
+                    }
+                 });
+                 if (errorDiv && errorDiv.textContent && !errorDiv.textContent.toLowerCase().includes('error: none')) {
+                     errorDiv.style.display = 'block';
+                 } else if (errorDiv) {
+                     errorDiv.style.display = 'none';
+                 }
+
+                // --- Restore container styles by removing inline styles ---
+                if (mainContainer) {
+                     mainContainer.style.backgroundColor = ''; // Revert to CSS (Tailwind)
+                     mainContainer.style.padding = '';
+                     mainContainer.style.boxShadow = '';
+                     mainContainer.style.borderRadius = '';
+                 }
+                 // --- Restore canvas container styles ---
+                 if (canvasContainer) {
+                     canvasContainer.style.border = '';
+                     canvasContainer.style.boxShadow = '';
+                     canvasContainer.style.borderRadius = '';
+                 }
+                  // --- Restore body styles ---
+                 document.body.style.padding = '';
+                 document.body.style.backgroundColor = '';
+
+
+                // Trigger windowResized in p5 to restore original canvas size
+                 if (p5Instance) {
+                    p5Instance.windowResized(); // Resizes based on original height
+                    if (isCollecting) {
+                         p5Instance.loop();
+                     } else {
+                         p5Instance.redraw();
+                     }
+                 }
+            }
+        }
+
         // --- Attempt Auto-Connect on Page Load ---
-        // Use DOMContentLoaded to ensure the page structure is ready
         document.addEventListener('DOMContentLoaded', async () => {
-             loadSettings(); // Loads settings and calls updateUIDependentElements
+             loadSettings();
              await tryAutoConnectOnLoad();
-             // If p5 wasn't initialized by auto-connect, initialize it here in a default state
+
+             // Add the fullscreen change listener
+             document.addEventListener('fullscreenchange', handleFullscreenChange);
+
              if (!p5Instance) {
                  console.log("Initializing p5 in default state (no connection).");
                  p5Instance = new p5(sketch);
-                 // p5 starts paused by default (noLoop() in setup)
              }
-             // Initial button states based on potential auto-connect
-             updateButtonStates(); // Keep this final call here
+             updateButtonStates();
         });
 
     </script>
