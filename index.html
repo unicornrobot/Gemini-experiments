@@ -159,6 +159,8 @@
         let isDebugMode = false; // Flag for debug mode state - NEW
         let originalCanvasHeight = 400; // Store the original height - NEW
 
+        let numberOfTouchSensors = 8;
+
         let p5Instance; // To hold the p5 sketch instance
         let currentVisualization = 'lines'; // Default FINAL visualization
         let currentLiveVisualization = 'centeredStrips'; // Default LIVE visualization
@@ -1090,7 +1092,7 @@
                     p.strokeWeight(baseStrokeWeight);
 
                     // Iterate through sensor streams (rings)
-                    for (let j = 0; j < numStreams; j++) {
+                    for (let j = 0; j < numberOfTouchSensors; j++) { //numStreams for all touch sensors
                         // Calculate the radius for the current sensor's ring
                         const radius = innerRadius + j * ringSpacing;
                         const diameter = radius * 2;
@@ -1128,7 +1130,7 @@
                      // Add text label
                      p.textAlign(p.CENTER, p.BOTTOM);
                      p.textSize(12);
-                     p.text(`Concentric Arcs: ${numStreams} sensors over ${numTimeSteps} time steps`, p.width/2, p.height - 5);
+                     p.text(`Concentric Arcs: ${numberOfTouchSensors} sensors over ${numTimeSteps} time steps`, p.width/2, p.height - 5);
 
                 }, // End concentricArcs
             }; // End visualizations object
