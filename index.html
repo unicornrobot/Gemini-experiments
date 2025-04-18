@@ -88,7 +88,8 @@
                     <option value="stackedBars">Stacked Bars</option>
                     <option value="histogram">Histogram</option>
                     <option value="heatmap">Heatmap</option>
-                    <option value="concentricArcs">Concentric Arcs</option> <!-- Add this line -->
+                    <option value="concentricArcs">Concentric Arcs</option>
+                    <option value="dashboard">Dashboard</option> <!-- Add this line -->
                 </select>
             </div>
 
@@ -1133,6 +1134,67 @@
                      p.text(`Concentric Arcs: ${numberOfTouchSensors} sensors over ${numTimeSteps} time steps`, p.width/2, p.height - 5);
 
                 }, // End concentricArcs
+
+                dashboard: (data) => {
+                    p.background(230, 230, 240); // Light grey background for the dashboard
+                    if (data.length === 0 || data[0].length === 0) {
+                         // ... (no data message) ...
+                         return;
+                    }
+
+                    const margin = 10;
+
+                    // --- Define Grid Boxes ---
+                    // Added names directly here for clarity in logging/debugging
+                    const box1 = { name: 'lines', x: margin, y: margin, w: p.width - 2 * margin, h: p.height * 0.6 - 1.5 * margin };
+                    const box2 = { name: 'stackedBars', x: margin, y: p.height * 0.6 + margin * 0.5, w: p.width * 0.5 - 1.5 * margin, h: p.height * 0.4 - 1.5 * margin };
+                    const box3 = { name: 'concentricArcs', x: p.width * 0.5 + margin * 0.5, y: p.height * 0.6 + margin * 0.5, w: p.width * 0.5 - 1.5 * margin, h: p.height * 0.4 - 1.5 * margin };
+
+                    // Helper function to draw a sub-viz (Revised)
+                    const drawSubViz = (vizFunc, box, data) => {
+                        p.push(); // Isolate transformations and styles
+                        try {
+                            // 1. Apply transformations
+                            p.translate(box.x, box.y);
+                            p.scale(box.w / p.width, box.h / p.height);
+
+                            // 2. REMOVED background clearing here. Draw directly on main background.
+
+                            // 3. REMOVED explicit state resets here. Rely on push/pop + viz function.
+
+                            // 4. Call the actual visualization function
+                            if (vizFunc && typeof vizFunc === 'function') {
+                                 console.log(`Dashboard: Drawing ${box.name}`); // Debug log
+                                 vizFunc(data); // Execute the visualization
+                            } else {
+                                 // ... (unavailable viz message) ...
+                            }
+
+                        } catch (error) {
+                             // ... (error handling) ...
+                             console.error(`Dashboard: Error in visualization '${box.name}':`, error);
+                             // Draw error message within the box (in scaled coordinates)
+                             p.background(255, 200, 200); // Use main background call within scaled context for error
+                             p.fill(150, 0, 0); p.noStroke(); p.textAlign(p.CENTER, p.CENTER);
+                             p.textSize(24); // Note: Text size will be scaled down by p.scale()
+                             p.text(`ERROR\n${box.name}\n${error.name}`, p.width / 2, p.height / 2);
+                        } finally {
+                             p.pop(); // Restore previous drawing state (transformations, styles)
+                        }
+
+                        // 5. Draw bounding box outline *after* pop (in main coordinates)
+                        p.stroke(200); p.strokeWeight(1); p.noFill();
+                        p.rect(box.x, box.y, box.w, box.h);
+                    };
+
+                    // --- Draw the Sub-Visualizations ---
+                    if (visualizations.lines) drawSubViz(visualizations.lines, box1, data);
+                    if (visualizations.stackedBars) drawSubViz(visualizations.stackedBars, box2, data);
+                    if (visualizations.concentricArcs) drawSubViz(visualizations.concentricArcs, box3, data);
+
+                     // Add dashboard title (optional)
+                     // ...
+                }, // End dashboard
             }; // End visualizations object
 
             p.setup = () => {
